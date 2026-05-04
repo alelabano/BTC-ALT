@@ -52,8 +52,8 @@ if not PRIVATE_KEY:
 
 # ── BTC Scalper Config ───────────────────────────────────────────
 BTC_COIN = "BTC"
-BTC_LEVERAGE = 10
-BTC_RISK_USD = 1
+BTC_LEVERAGE = 12
+BTC_RISK_USD = 1.2
 BTC_MAX_POSITIONS = 4
 BTC_COOLDOWN_SEC = 180
 BTC_COOLDOWN_AFTER_LOSS = 300  # 5 min dopo un loss
@@ -114,8 +114,8 @@ CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 
 # ── Unified Executor Config ─────────────────────────────────────
 ALT_MAX_CONCURRENT = 4         # max altcoin positions
-ALT_TRADE_SIZE_USD = 1.0  # overridden by balance % in execute
-ALT_LEVERAGE = 10
+ALT_TRADE_SIZE_USD = 1.2  # overridden by balance % in execute
+ALT_LEVERAGE = 12
 ALT_CHECK_INTERVAL = 2
 ALT_SIGNAL_MAX_AGE = 3 * 60
 SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
