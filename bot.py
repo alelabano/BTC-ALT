@@ -5840,7 +5840,7 @@ def run_scanner():
 
     for asset, ctx in zip(meta_assets, ctxs_main):
         coin = asset["name"]
-        if coin in COIN_BLACKLIST or coin.startswith("@") or coin.startswith("k"):
+        if coin in COIN_BLACKLIST or coin.startswith("@") or coin.startswith("#") or coin.startswith("k"):
             continue
         try:
             px     = float(ctx.get("markPx", 0) or 0)
@@ -6100,7 +6100,7 @@ def fast_track_thread():
                         continue
                     if coin in COIN_BLACKLIST:
                         continue
-                    if coin.startswith("@"):
+                    if coin.startswith("@") or coin.startswith("#"):
                         continue
 
                     prev = _fast_track_prev_prices.get(coin, 0)
