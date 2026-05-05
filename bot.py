@@ -5023,15 +5023,49 @@ def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
         return False
     is_buy = (direction == "LONG")
 
+    # 1. Recupero balance e controllo preliminare
     balance = get_account_balance()
-    if balance < (TRADE_SIZE_USD) * 1.1:
-        log_err(f"[{coin}] Balance ${balance:.2f} insufficiente")
+    if balance < (TRADE_SIZE_USD):
+        log_err(f"[{coin}] Balance ${balance:.2f} insufficiente per {TRADE_SIZE_USD}")
         return False
 
+    # 2. Recupero prezzo attuale
     mid_px = float(mids.get(coin, 0) or 0)
     if mid_px <= 0:
         log_err(f"[{coin}] Prezzo non disponibile")
         return False
+
+    # --- AGGIUNTA: CALCOLO DELLA SIZE (szi) ---
+    
+    # Calcoliamo il valore totale della posizione (Margine * Leva)
+    # Se TRADE_SIZE_USD = 1.2 e LEVERAGE = 12, position_value = 14.4 USD
+    position_value_usd = TRADE_SIZE_USD * BTC_LEVERAGE 
+    
+    # Calcoliamo quanti BTC (o coin) corrispondono a quel valore
+    # Size = Valore in USD / Prezzo
+    raw_sz = position_value_usd / mid_px
+    
+    # Arrotondiamo la size in base ai decimali permessi dall'exchange (sz_dec)
+    sz = round(raw_sz, sz_dec)
+
+    if sz <= 0:
+        log_err(f"[{coin}] Size calcolata troppo piccola: {raw_sz}")
+        return False
+
+    # 3. Invio dell'ordine con la size corretta
+    try:
+        log_btc(f"[{coin}] Tentativo apertura {direction} | Size: {sz} {coin} (~{TRADE_SIZE_USD}$ margine)")
+        
+        # Qui chiami la funzione del tuo exchange wrapper (es. HL)
+        # È fondamentale passare 'sz' e non il balance!
+        response = _exchange.market_open(coin, is_buy, sz, mid_px, slippage=0.01)
+        
+        if response:
+            return True
+    except Exception as e:
+        log_err(f"Errore esecuzione ordine: {e}")
+        
+    return False
 
     # ── PRICE DRIFT CHECK ─────────────────────────────────────────
     # Il segnale è stato generato a signal_px. Se il prezzo si è già mosso
