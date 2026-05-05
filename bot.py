@@ -3906,7 +3906,6 @@ Valuta SOLO: 1)Liquidità sufficiente? 2)BTC supporta? 3)Rischi wick/liquidazion
 
 JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio liquidazione/wick imminente>,"strategy":"{strategy}","mode":"SCALPING|SWING","reasoning":"<max 10 parole>"}}"""
 
-    try:
         resp = requests.post(
             "https://api.deepseek.com/chat/completions",
             headers={
@@ -3930,13 +3929,13 @@ JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio l
             log_err(f"[{coin}] AI HTTP {resp.status_code}: {resp.text[:100]}")
             return True, 0, "AI non disponibile", strategy, "SCALPING"
 
-        # Estrazione corretta per DeepSeek
+        # Estrazione diretta (OpenAI/DeepSeek style)
         res_data = resp.json()
-        text = res_data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        text = res_data["choices"][0]["message"]["content"].strip()
         
         result = _parse_ai_json(text)
         
-        # Estrazione parametri dal JSON processato
+        # Assegnazione parametri
         score       = int(result.get("score", 5))
         valid       = score >= 3
         wait        = bool(result.get("wait", False))
@@ -3944,7 +3943,7 @@ JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio l
         ai_strategy = result.get("strategy", strategy)
         ai_mode     = result.get("mode", "SCALPING")
 
-        # Validazione logica dei valori ritornati
+        # Correzione automatica se l'AI inventa strategie inesistenti
         if ai_strategy not in ("MEAN_REV", "TREND", "HYBRID"):
             ai_strategy = strategy
         if ai_mode not in ("SCALPING", "SWING"):
@@ -3956,11 +3955,6 @@ JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio l
 
         log_alt(f"[{coin}] AI → strategy:{ai_strategy} mode:{ai_mode} score:{score} | {reason}")
         return valid, score, reason, ai_strategy, ai_mode
-
-    except Exception as e:
-        log_err(f"[{coin}] ai_validate: {e}")
-        # Fail-open: approvazione cautelativa in caso di errore tecnico
-        return True, 5, "AI fallback — approva", strategy, "SCALPING"
 
 def quick_backtest(df: pd.DataFrame, direction: str, coin: str = "",
                    mode: str = "SCALPING", strategy: str = "MOMENTUM") -> dict:
