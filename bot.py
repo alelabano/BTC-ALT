@@ -53,7 +53,8 @@ if not PRIVATE_KEY:
 # ── BTC Scalper Config ───────────────────────────────────────────
 BTC_COIN = "BTC"
 BTC_LEVERAGE = 12
-BTC_RISK_USD = 1.2
+BTC_MARGIN_USD = 1.2       # margine per trade BTC — notional = BTC_MARGIN_USD × leva effettiva
+MIN_NOTIONAL_USD = 10.0    # Hyperliquid minimum $10 notional (shared BTC + ALT)
 BTC_MAX_POSITIONS = 6
 BTC_COOLDOWN_SEC = 180
 BTC_COOLDOWN_AFTER_LOSS = 300  # 5 min dopo un loss
@@ -114,7 +115,7 @@ CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 
 # ── Unified Executor Config ─────────────────────────────────────
 ALT_MAX_CONCURRENT = 4         # max altcoin positions
-ALT_TRADE_SIZE_USD = 1.2  # overridden by balance % in execute
+ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
 ALT_LEVERAGE = 12
 ALT_CHECK_INTERVAL = 2
 ALT_SIGNAL_MAX_AGE = 3 * 60
@@ -2593,21 +2594,25 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
     try:
         is_long = direction == "LONG"
 
-        # ── SIZE: fisso $5 notional ──
-        BTC_MARGIN = 5.0
-        notional = BTC_MARGIN * BTC_LEVERAGE  # $5 margin × 5x = $25 notional
-        
+        # ── LEVERAGE: imposta prima per ottenere la leva effettiva ──
+        try: call(_exchange.update_leverage, min(BTC_LEVERAGE, get_max_leverage()), BTC_COIN, is_cross=False, timeout=10)
+        except: pass
+
+        # ── SIZE: margine × leva effettiva, con floor $10 notional ──
+        # notional = max(MIN_NOTIONAL_USD, BTC_MARGIN_USD × leva_effettiva)
+        # size (coin) = notional / entry_px
+        effective_lev = BTC_LEVERAGE  # leva richiesta (max già cap-pata sopra)
+        notional = max(MIN_NOTIONAL_USD, BTC_MARGIN_USD * effective_lev)
+        margin_used = notional / effective_lev
+
         bal = get_balance()
-        if notional / BTC_LEVERAGE > bal * 0.9:
-            log_btc(f"❌ Balance ${bal:.2f} insufficiente per ${notional} notional")
+        if margin_used > bal * 0.9:
+            log_btc(f"❌ Balance ${bal:.2f} insufficiente — margin richiesto ${margin_used:.2f} (notional ${notional:.2f})")
             return False
         size = rpx(notional / entry_px, sz_dec)
         if size <= 0:
-            log_btc(f"Size zero: notional=${notional:.0f}"); return False
-
-        # ── LEVERAGE ──
-        try: call(_exchange.update_leverage, min(BTC_LEVERAGE, get_max_leverage()), BTC_COIN, is_cross=False, timeout=10)
-        except: pass
+            log_btc(f"Size zero: notional=${notional:.2f} entry={entry_px}"); return False
+        log_btc(f"💰 SIZE: margin=${margin_used:.2f} × leva={effective_lev}x → notional=${notional:.2f} → {size} BTC")
 
         # ── ENTRY: aggressivo al mid — filla subito ──
         mid = get_mid()
@@ -5023,49 +5028,15 @@ def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
         return False
     is_buy = (direction == "LONG")
 
-    # 1. Recupero balance e controllo preliminare
     balance = get_account_balance()
-    if balance < (TRADE_SIZE_USD):
-        log_err(f"[{coin}] Balance ${balance:.2f} insufficiente per {TRADE_SIZE_USD}")
+    if balance < (TRADE_SIZE_USD) * 1.1:
+        log_err(f"[{coin}] Balance ${balance:.2f} insufficiente")
         return False
 
-    # 2. Recupero prezzo attuale
     mid_px = float(mids.get(coin, 0) or 0)
     if mid_px <= 0:
         log_err(f"[{coin}] Prezzo non disponibile")
         return False
-
-    # --- AGGIUNTA: CALCOLO DELLA SIZE (szi) ---
-    
-    # Calcoliamo il valore totale della posizione (Margine * Leva)
-    # Se TRADE_SIZE_USD = 1.2 e LEVERAGE = 12, position_value = 14.4 USD
-    position_value_usd = TRADE_SIZE_USD * BTC_LEVERAGE 
-    
-    # Calcoliamo quanti BTC (o coin) corrispondono a quel valore
-    # Size = Valore in USD / Prezzo
-    raw_sz = position_value_usd / mid_px
-    
-    # Arrotondiamo la size in base ai decimali permessi dall'exchange (sz_dec)
-    sz = round(raw_sz, sz_dec)
-
-    if sz <= 0:
-        log_err(f"[{coin}] Size calcolata troppo piccola: {raw_sz}")
-        return False
-
-    # 3. Invio dell'ordine con la size corretta
-    try:
-        log_btc(f"[{coin}] Tentativo apertura {direction} | Size: {sz} {coin} (~{TRADE_SIZE_USD}$ margine)")
-        
-        # Qui chiami la funzione del tuo exchange wrapper (es. HL)
-        # È fondamentale passare 'sz' e non il balance!
-        response = _exchange.market_open(coin, is_buy, sz, mid_px, slippage=0.01)
-        
-        if response:
-            return True
-    except Exception as e:
-        log_err(f"Errore esecuzione ordine: {e}")
-        
-    return False
 
     # ── PRICE DRIFT CHECK ─────────────────────────────────────────
     # Il segnale è stato generato a signal_px. Se il prezzo si è già mosso
@@ -5157,14 +5128,17 @@ def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
         log_err(f"[{coin}] SHORT SL/TP incoerenti (e:{entry_px} sl:{sl_px} tp:{tp_px})")
         return False
 
-    # Size calcolata sul nozionale — $4 margine × 20x leva — Hyperliquid min $10 nominale
-    size_nominal = round_to_decimals((TRADE_SIZE_USD * LEVERAGE) / entry_px, sz_dec)
+    # Size calcolata sul nozionale — margine × leva effettiva, floor MIN_NOTIONAL_USD ($10)
+    # notional = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD × LEVERAGE)
+    notional_target = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * LEVERAGE)
+    size_nominal = round_to_decimals(notional_target / entry_px, sz_dec)
     if size_nominal <= 0:
         return False
 
-    if size_nominal * entry_px < 10.0:
-        log_err(f"[{coin}] Size nominale insufficiente ({size_nominal} * {entry_px:.4f} = {size_nominal * entry_px:.2f})")
+    if size_nominal * entry_px < MIN_NOTIONAL_USD:
+        log_err(f"[{coin}] Notional insufficiente ({size_nominal} × {entry_px:.4f} = {size_nominal * entry_px:.2f} < {MIN_NOTIONAL_USD})")
         return False
+    log_exec(f"[{coin}] 💰 SIZE: margin=${TRADE_SIZE_USD:.2f} × leva={LEVERAGE}x → notional=${notional_target:.2f} → {size_nominal}")
 
     log_exec(f"[{coin}] {direction} entry:{entry_px} sl:{sl_px} tp:{tp_px} size:{size_nominal}")
 
@@ -5214,11 +5188,13 @@ def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
                 ts_dist_old = abs(entry_px - round_to_decimals(ts_raw, effective_px_dec))
                 ts_raw = entry_px - ts_dist_old * lev_scale if is_buy else entry_px + ts_dist_old * lev_scale
 
-            # Ricalcola size con leva effettiva
-            size_nominal = round_to_decimals((TRADE_SIZE_USD * actual_lev) / entry_px, sz_dec)
-            if size_nominal <= 0 or size_nominal * entry_px < 10.0:
-                log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: {size_nominal * entry_px:.2f}")
+            # Ricalcola size con leva effettiva (mantiene floor MIN_NOTIONAL_USD)
+            notional_actual = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * actual_lev)
+            size_nominal = round_to_decimals(notional_actual / entry_px, sz_dec)
+            if size_nominal <= 0 or size_nominal * entry_px < MIN_NOTIONAL_USD:
+                log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: notional=${size_nominal * entry_px:.2f}")
                 return False
+            log_exec(f"[{coin}] 💰 Ricalcolo: margin=${TRADE_SIZE_USD:.2f} × leva={actual_lev}x → notional=${notional_actual:.2f} → {size_nominal}")
 
             sl_pct = abs(entry_px - sl_px) / entry_px * 100
             tp_pct = abs(tp_px - entry_px) / entry_px * 100
@@ -6460,7 +6436,7 @@ def executor_thread_alt():
 
 def main():
     log("MAIN", "🚀 UNIFIED BOT — BTC Scalper V7 + Altcoin Processor")
-    log("MAIN", f"BTC: Risk ${BTC_RISK_USD} Lev:{BTC_LEVERAGE}x | ALT: Size ${ALT_TRADE_SIZE_USD} Lev:{ALT_LEVERAGE}x")
+    log("MAIN", f"BTC: Margin ${BTC_MARGIN_USD} Lev:{BTC_LEVERAGE}x (notional max(${MIN_NOTIONAL_USD:.0f}, ${BTC_MARGIN_USD}×lev)) | ALT: Margin ${ALT_TRADE_SIZE_USD} Lev:{ALT_LEVERAGE}x")
     log("MAIN", f"V7 Modules: Sentiment + Order Flow + ML")
     log("MAIN", f"Fleet: INTERNAL (no cross-worker Redis)")
     log("MAIN", f"Redis: {'✅' if REDIS_URL else '⚠️ non configurato'}")
