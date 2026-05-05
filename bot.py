@@ -138,7 +138,7 @@ SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
 META_REFRESH_CYCLES = 2
 ENTRY_POLL_ATTEMPTS = 2; ENTRY_POLL_INTERVAL = 0.2
 COIN_COOLDOWN_MR = 3600; COIN_COOLDOWN_TREND = 14400; COIN_COOLDOWN = 3600
-SETUP_SCORE_MIN = 20
+SETUP_SCORE_MIN = 45  # soglia minima: trend(30) + spread ok(15) = 45 base senza AI
 ALT_TRAILING_INTERVAL = 10  # ALT trailing check ogni 30s
 SCANNER_INTERVAL = 2 * 60; SCANNER_MAX_UNIVERSE = 229
 PROCESSOR_MAX_COINS = 30
@@ -1990,7 +1990,8 @@ def check_signal():
     details = ""
     size_mult = 1.0
 
-    if regime == "RANGE_LOW_VOL":
+    # RANGE_LOW_VOL blocca, ma non se c'è un vero spike di volume (vol_rel > 2)
+    if regime == "RANGE_LOW_VOL" and vol5 < 2.0:
         return None
 
     # Environment check
@@ -1998,7 +1999,8 @@ def check_signal():
     flow_neutral = flow_sig_check.get("bias", "NEUTRAL") == "NEUTRAL"
     sent = get_sentiment_score()
     sent_neutral = 40 <= sent <= 60
-    if flow_neutral and sent_neutral and adx1h < 20:
+    # Blocca solo se flow NEUTRO e mercato piatto (ADX<18) — sentiment non blocca da solo
+    if flow_neutral and adx1h < 18:
         return None
 
     atr_pct = atr5 / px if px > 0 else 0
@@ -2093,8 +2095,8 @@ def check_signal():
     sl_dist = atr5 * 1.2
     sl_dist = max(sl_dist, px * 0.004)   # floor 0.4% — minimo assoluto
     sl_dist = min(sl_dist, px * 0.015)   # cap 1.5% — non troppo largo
-    tp1_dist = px * 0.005   # 0.5%
-    tp2_dist = px * 0.008   # 0.8%
+    tp1_dist = max(px * 0.005, sl_dist * 1.2)   # TP1 = almeno 1.2× SL
+    tp2_dist = max(px * 0.008, sl_dist * 2.0)   # TP2 = almeno 2× SL — garantisce R:R > 1
 
     tp1_dist = max(tp1_dist, px * 0.003)
     tp2_dist = max(tp2_dist, px * 0.005)
@@ -2111,8 +2113,8 @@ def check_signal():
 
     fee_cost = px * 0.001
     effective_rr = (tp2_dist - fee_cost) / (sl_dist + fee_cost)
-    if effective_rr < 0.8:
-        log_btc(f"❌ R:R {effective_rr:.2f} < 0.8 — skip")
+    if effective_rr < 1.2:
+        log_btc(f"❌ R:R {effective_rr:.2f} < 1.2 — skip")
         return None
 
     if direction == "LONG":
