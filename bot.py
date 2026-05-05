@@ -41,14 +41,18 @@ from hyperliquid.utils import constants
 # ================================================================
 # CONFIGURAZIONE GLOBALE
 # ================================================================
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
-TG_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
-TG_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID", "")
-REDIS_URL   = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
-REDIS_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+PRIVATE_KEY       = os.getenv("PRIVATE_KEY")
+TG_TOKEN          = os.getenv("TELEGRAM_TOKEN", "")
+TG_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID", "")
+REDIS_URL         = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
+REDIS_TOKEN       = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+ANTHROPIC_API_KEY = ANTHROPIC_API_KEY
 
 if not PRIVATE_KEY:
     print("❌ PRIVATE_KEY mancante"); sys.exit(1)
+
+if not ANTHROPIC_API_KEY:
+    print("⚠️  ANTHROPIC_API_KEY mancante — le funzioni AI useranno il fallback meccanico")
 
 # ── BTC Scalper Config ───────────────────────────────────────────
 BTC_COIN = "BTC"
@@ -3550,6 +3554,50 @@ def _parse_ai_json(text: str) -> dict:
     raise ValueError("JSON non chiuso correttamente")
 
 
+
+def _call_anthropic(prompt: str, max_tokens: int = 400, label: str = "") -> str:
+    """
+    Chiamata centralizzata all API Anthropic.
+    Ritorna il testo della risposta oppure None se fallisce.
+    Logga il motivo esatto dell errore (chiave mancante, 401, 429, timeout, ecc.)
+    """
+    if not ANTHROPIC_API_KEY:
+        log_err(f"[{label}] AI non disponibile: ANTHROPIC_API_KEY non impostata")
+        return None
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type":      "application/json",
+                "x-api-key":         ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model":      "claude-haiku-4-5-20251001",
+                "max_tokens": max_tokens,
+                "messages":   [{"role": "user", "content": prompt}]
+            },
+            timeout=20
+        )
+        if resp.status_code == 200:
+            return resp.json().get("content", [{}])[0].get("text", "").strip()
+        if resp.status_code == 401:
+            log_err(f"[{label}] AI errore 401 — ANTHROPIC_API_KEY non valida o scaduta")
+        elif resp.status_code == 429:
+            log_err(f"[{label}] AI errore 429 — rate limit Anthropic raggiunto")
+        elif resp.status_code == 529:
+            log_err(f"[{label}] AI errore 529 — Anthropic overloaded")
+        else:
+            log_err(f"[{label}] AI HTTP {resp.status_code}: {resp.text[:200]}")
+        return None
+    except requests.exceptions.Timeout:
+        log_err(f"[{label}] AI timeout (>20s)")
+        return None
+    except Exception as e:
+        log_err(f"[{label}] AI eccezione: {e}")
+        return None
+
+
 def fetch_liquidity_data(coin: str, px: float) -> dict:
     """
     Recupera orderbook L2 e calcola:
@@ -3906,55 +3954,30 @@ Valuta SOLO: 1)Liquidità sufficiente? 2)BTC supporta? 3)Rischi wick/liquidazion
 
 JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio liquidazione/wick imminente>,"strategy":"{strategy}","mode":"SCALPING|SWING","reasoning":"<max 10 parole>"}}"""
 
-        resp = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY', '')}"
-            },
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": "Sei un analista crypto. Rispondi solo in JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 400,
-                "temperature": 0.1,
-                "response_format": {"type": "json_object"}
-            },
-            timeout=20
-        )
-
-        if resp.status_code != 200:
-            log_err(f"[{coin}] AI HTTP {resp.status_code}: {resp.text[:100]}")
-            return True, 0, "AI non disponibile", strategy, "SCALPING"
-
-        # Estrazione diretta (OpenAI/DeepSeek style)
-        res_data = resp.json()
-        text = res_data["choices"][0]["message"]["content"].strip()
-        
+        text = _call_anthropic(prompt, max_tokens=400, label=coin)
+        if text is None:
+            # API non disponibile: bypass AI con score neutro — size piena, nessuna penalità
+            return True, 5, "AI bypass (chiave non attiva)", strategy, "SCALPING"
         result = _parse_ai_json(text)
-        
-        # Assegnazione parametri
-        score       = int(result.get("score", 5))
-        valid       = score >= 3
-        wait        = bool(result.get("wait", False))
-        reason      = result.get("reasoning", "")
-        ai_strategy = result.get("strategy", strategy)
+        score      = int(result.get("score", 5))
+        valid      = score >= 3
+        wait       = bool(result.get("wait", False))
+        reason     = result.get("reasoning", "")
+        ai_strategy = result.get("strategy", strategy)   # AI può sovrascrivere
         ai_mode     = result.get("mode", "SCALPING")
-
-        # Correzione automatica se l'AI inventa strategie inesistenti
         if ai_strategy not in ("MEAN_REV", "TREND", "HYBRID"):
             ai_strategy = strategy
         if ai_mode not in ("SCALPING", "SWING"):
             ai_mode = "SCALPING"
-            
         if wait:
             valid  = False
             reason = f"⏳ {reason}"
-
         log_alt(f"[{coin}] AI → strategy:{ai_strategy} mode:{ai_mode} score:{score} | {reason}")
         return valid, score, reason, ai_strategy, ai_mode
+    except Exception as e:
+        log_err(f"[{coin}] ai_validate: {e}")
+        # Fail-open: se AI non risponde o risponde male, approva con score neutro
+        return True, 5, "AI fallback — approva", strategy, "SCALPING"
 
 def quick_backtest(df: pd.DataFrame, direction: str, coin: str = "",
                    mode: str = "SCALPING", strategy: str = "MOMENTUM") -> dict:
@@ -5423,7 +5446,7 @@ Rispondi SOLO con JSON:
             "https://api.anthropic.com/v1/messages",
             headers={
                 "Content-Type":      "application/json",
-                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
+                "x-api-key":         ANTHROPIC_API_KEY,
                 "anthropic-version": "2023-06-01",
             },
             json={
@@ -5514,7 +5537,7 @@ Rispondi SOLO con JSON:
             "https://api.anthropic.com/v1/messages",
             headers={
                 "Content-Type":      "application/json",
-                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
+                "x-api-key":         ANTHROPIC_API_KEY,
                 "anthropic-version": "2023-06-01",
             },
             json={
@@ -5526,7 +5549,8 @@ Rispondi SOLO con JSON:
         )
 
         if resp.status_code != 200:
-            return False, "AI non disponibile"
+            log_err(f"[{coin}] ai_should_exit_early HTTP {resp.status_code}: {resp.text[:100]}")
+            return False, "AI bypass (chiave non attiva)"
 
         text   = resp.json().get("content", [{}])[0].get("text", "").strip()
         result = _parse_ai_json(text)
@@ -6451,6 +6475,11 @@ def main():
     log("MAIN", f"V7 Modules: Sentiment + Order Flow + ML")
     log("MAIN", f"Fleet: INTERNAL (no cross-worker Redis)")
     log("MAIN", f"Redis: {'✅' if REDIS_URL else '⚠️ non configurato'}")
+    if ANTHROPIC_API_KEY:
+        log("MAIN", "AI: ✅ Anthropic API attiva — validazione segnali abilitata")
+    else:
+        log("MAIN", "AI: ⚠️ ANTHROPIC_API_KEY non impostata — bypass attivo (score neutro 5, size piena)")
+        tg("⚠️ <b>Bot avviato senza AI</b> — ANTHROPIC_API_KEY mancante.\nValidazione AI bypassata, score neutro 5, size piena.", silent=True)
 
     # Load persisted state
     load_state()
