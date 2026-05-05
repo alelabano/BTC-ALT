@@ -3906,7 +3906,7 @@ Valuta SOLO: 1)Liquidità sufficiente? 2)BTC supporta? 3)Rischi wick/liquidazion
 
 JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio liquidazione/wick imminente>,"strategy":"{strategy}","mode":"SCALPING|SWING","reasoning":"<max 10 parole>"}}"""
 
-try:
+    try:
         resp = requests.post(
             "https://api.deepseek.com/chat/completions",
             headers={
