@@ -41,24 +41,19 @@ from hyperliquid.utils import constants
 # ================================================================
 # CONFIGURAZIONE GLOBALE
 # ================================================================
-PRIVATE_KEY       = os.getenv("PRIVATE_KEY")
-TG_TOKEN          = os.getenv("TELEGRAM_TOKEN", "")
-TG_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID", "")
-REDIS_URL         = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
-REDIS_TOKEN       = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
-ANTHROPIC_API_KEY = ANTHROPIC_API_KEY
+PRIVATE_KEY = os.getenv("PRIVATE_KEY")
+TG_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
+TG_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID", "")
+REDIS_URL   = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
+REDIS_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
 
 if not PRIVATE_KEY:
     print("❌ PRIVATE_KEY mancante"); sys.exit(1)
 
-if not ANTHROPIC_API_KEY:
-    print("⚠️  ANTHROPIC_API_KEY mancante — le funzioni AI useranno il fallback meccanico")
-
 # ── BTC Scalper Config ───────────────────────────────────────────
 BTC_COIN = "BTC"
 BTC_LEVERAGE = 12
-BTC_MARGIN_USD = 1.2       # margine per trade BTC — notional = BTC_MARGIN_USD × leva effettiva
-MIN_NOTIONAL_USD = 10.0    # Hyperliquid minimum $10 notional (shared BTC + ALT)
+BTC_RISK_USD = 1.2
 BTC_MAX_POSITIONS = 6
 BTC_COOLDOWN_SEC = 180
 BTC_COOLDOWN_AFTER_LOSS = 300  # 5 min dopo un loss
@@ -119,7 +114,7 @@ CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 
 # ── Unified Executor Config ─────────────────────────────────────
 ALT_MAX_CONCURRENT = 4         # max altcoin positions
-ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
+ALT_TRADE_SIZE_USD = 1.2  # overridden by balance % in execute
 ALT_LEVERAGE = 12
 ALT_CHECK_INTERVAL = 2
 ALT_SIGNAL_MAX_AGE = 3 * 60
@@ -2598,25 +2593,21 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
     try:
         is_long = direction == "LONG"
 
-        # ── LEVERAGE: imposta prima per ottenere la leva effettiva ──
-        try: call(_exchange.update_leverage, min(BTC_LEVERAGE, get_max_leverage()), BTC_COIN, is_cross=False, timeout=10)
-        except: pass
-
-        # ── SIZE: margine × leva effettiva, con floor $10 notional ──
-        # notional = max(MIN_NOTIONAL_USD, BTC_MARGIN_USD × leva_effettiva)
-        # size (coin) = notional / entry_px
-        effective_lev = BTC_LEVERAGE  # leva richiesta (max già cap-pata sopra)
-        notional = max(MIN_NOTIONAL_USD, BTC_MARGIN_USD * effective_lev)
-        margin_used = notional / effective_lev
-
+        # ── SIZE: fisso $5 notional ──
+        BTC_MARGIN = 5.0
+        notional = BTC_MARGIN * BTC_LEVERAGE  # $5 margin × 5x = $25 notional
+        
         bal = get_balance()
-        if margin_used > bal * 0.9:
-            log_btc(f"❌ Balance ${bal:.2f} insufficiente — margin richiesto ${margin_used:.2f} (notional ${notional:.2f})")
+        if notional / BTC_LEVERAGE > bal * 0.9:
+            log_btc(f"❌ Balance ${bal:.2f} insufficiente per ${notional} notional")
             return False
         size = rpx(notional / entry_px, sz_dec)
         if size <= 0:
-            log_btc(f"Size zero: notional=${notional:.2f} entry={entry_px}"); return False
-        log_btc(f"💰 SIZE: margin=${margin_used:.2f} × leva={effective_lev}x → notional=${notional:.2f} → {size} BTC")
+            log_btc(f"Size zero: notional=${notional:.0f}"); return False
+
+        # ── LEVERAGE ──
+        try: call(_exchange.update_leverage, min(BTC_LEVERAGE, get_max_leverage()), BTC_COIN, is_cross=False, timeout=10)
+        except: pass
 
         # ── ENTRY: aggressivo al mid — filla subito ──
         mid = get_mid()
@@ -3554,50 +3545,6 @@ def _parse_ai_json(text: str) -> dict:
     raise ValueError("JSON non chiuso correttamente")
 
 
-
-def _call_anthropic(prompt: str, max_tokens: int = 400, label: str = "") -> str:
-    """
-    Chiamata centralizzata all API Anthropic.
-    Ritorna il testo della risposta oppure None se fallisce.
-    Logga il motivo esatto dell errore (chiave mancante, 401, 429, timeout, ecc.)
-    """
-    if not ANTHROPIC_API_KEY:
-        log_err(f"[{label}] AI non disponibile: ANTHROPIC_API_KEY non impostata")
-        return None
-    try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type":      "application/json",
-                "x-api-key":         ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model":      "claude-haiku-4-5-20251001",
-                "max_tokens": max_tokens,
-                "messages":   [{"role": "user", "content": prompt}]
-            },
-            timeout=20
-        )
-        if resp.status_code == 200:
-            return resp.json().get("content", [{}])[0].get("text", "").strip()
-        if resp.status_code == 401:
-            log_err(f"[{label}] AI errore 401 — ANTHROPIC_API_KEY non valida o scaduta")
-        elif resp.status_code == 429:
-            log_err(f"[{label}] AI errore 429 — rate limit Anthropic raggiunto")
-        elif resp.status_code == 529:
-            log_err(f"[{label}] AI errore 529 — Anthropic overloaded")
-        else:
-            log_err(f"[{label}] AI HTTP {resp.status_code}: {resp.text[:200]}")
-        return None
-    except requests.exceptions.Timeout:
-        log_err(f"[{label}] AI timeout (>20s)")
-        return None
-    except Exception as e:
-        log_err(f"[{label}] AI eccezione: {e}")
-        return None
-
-
 def fetch_liquidity_data(coin: str, px: float) -> dict:
     """
     Recupera orderbook L2 e calcola:
@@ -3954,10 +3901,24 @@ Valuta SOLO: 1)Liquidità sufficiente? 2)BTC supporta? 3)Rischi wick/liquidazion
 
 JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio liquidazione/wick imminente>,"strategy":"{strategy}","mode":"SCALPING|SWING","reasoning":"<max 10 parole>"}}"""
 
-        text = _call_anthropic(prompt, max_tokens=400, label=coin)
-        if text is None:
-            # API non disponibile: bypass AI con score neutro — size piena, nessuna penalità
-            return True, 5, "AI bypass (chiave non attiva)", strategy, "SCALPING"
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type":      "application/json",
+                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model":      "claude-haiku-4-5-20251001",
+                "max_tokens": 400,
+                "messages":   [{"role": "user", "content": prompt}]
+            },
+            timeout=20
+        )
+        if resp.status_code != 200:
+            log_err(f"[{coin}] AI HTTP {resp.status_code}: {resp.text[:100]}")
+            return True, 0, "AI non disponibile", strategy, "SCALPING"
+        text   = resp.json().get("content", [{}])[0].get("text", "").strip()
         result = _parse_ai_json(text)
         score      = int(result.get("score", 5))
         valid      = score >= 3
@@ -5162,17 +5123,14 @@ def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
         log_err(f"[{coin}] SHORT SL/TP incoerenti (e:{entry_px} sl:{sl_px} tp:{tp_px})")
         return False
 
-    # Size calcolata sul nozionale — margine × leva effettiva, floor MIN_NOTIONAL_USD ($10)
-    # notional = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD × LEVERAGE)
-    notional_target = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * LEVERAGE)
-    size_nominal = round_to_decimals(notional_target / entry_px, sz_dec)
+    # Size calcolata sul nozionale — $4 margine × 20x leva — Hyperliquid min $10 nominale
+    size_nominal = round_to_decimals((TRADE_SIZE_USD * LEVERAGE) / entry_px, sz_dec)
     if size_nominal <= 0:
         return False
 
-    if size_nominal * entry_px < MIN_NOTIONAL_USD:
-        log_err(f"[{coin}] Notional insufficiente ({size_nominal} × {entry_px:.4f} = {size_nominal * entry_px:.2f} < {MIN_NOTIONAL_USD})")
+    if size_nominal * entry_px < 10.0:
+        log_err(f"[{coin}] Size nominale insufficiente ({size_nominal} * {entry_px:.4f} = {size_nominal * entry_px:.2f})")
         return False
-    log_exec(f"[{coin}] 💰 SIZE: margin=${TRADE_SIZE_USD:.2f} × leva={LEVERAGE}x → notional=${notional_target:.2f} → {size_nominal}")
 
     log_exec(f"[{coin}] {direction} entry:{entry_px} sl:{sl_px} tp:{tp_px} size:{size_nominal}")
 
@@ -5222,13 +5180,11 @@ def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
                 ts_dist_old = abs(entry_px - round_to_decimals(ts_raw, effective_px_dec))
                 ts_raw = entry_px - ts_dist_old * lev_scale if is_buy else entry_px + ts_dist_old * lev_scale
 
-            # Ricalcola size con leva effettiva (mantiene floor MIN_NOTIONAL_USD)
-            notional_actual = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * actual_lev)
-            size_nominal = round_to_decimals(notional_actual / entry_px, sz_dec)
-            if size_nominal <= 0 or size_nominal * entry_px < MIN_NOTIONAL_USD:
-                log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: notional=${size_nominal * entry_px:.2f}")
+            # Ricalcola size con leva effettiva
+            size_nominal = round_to_decimals((TRADE_SIZE_USD * actual_lev) / entry_px, sz_dec)
+            if size_nominal <= 0 or size_nominal * entry_px < 10.0:
+                log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: {size_nominal * entry_px:.2f}")
                 return False
-            log_exec(f"[{coin}] 💰 Ricalcolo: margin=${TRADE_SIZE_USD:.2f} × leva={actual_lev}x → notional=${notional_actual:.2f} → {size_nominal}")
 
             sl_pct = abs(entry_px - sl_px) / entry_px * 100
             tp_pct = abs(tp_px - entry_px) / entry_px * 100
@@ -5446,7 +5402,7 @@ Rispondi SOLO con JSON:
             "https://api.anthropic.com/v1/messages",
             headers={
                 "Content-Type":      "application/json",
-                "x-api-key":         ANTHROPIC_API_KEY,
+                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
                 "anthropic-version": "2023-06-01",
             },
             json={
@@ -5537,7 +5493,7 @@ Rispondi SOLO con JSON:
             "https://api.anthropic.com/v1/messages",
             headers={
                 "Content-Type":      "application/json",
-                "x-api-key":         ANTHROPIC_API_KEY,
+                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
                 "anthropic-version": "2023-06-01",
             },
             json={
@@ -5549,8 +5505,7 @@ Rispondi SOLO con JSON:
         )
 
         if resp.status_code != 200:
-            log_err(f"[{coin}] ai_should_exit_early HTTP {resp.status_code}: {resp.text[:100]}")
-            return False, "AI bypass (chiave non attiva)"
+            return False, "AI non disponibile"
 
         text   = resp.json().get("content", [{}])[0].get("text", "").strip()
         result = _parse_ai_json(text)
@@ -6471,15 +6426,10 @@ def executor_thread_alt():
 
 def main():
     log("MAIN", "🚀 UNIFIED BOT — BTC Scalper V7 + Altcoin Processor")
-    log("MAIN", f"BTC: Margin ${BTC_MARGIN_USD} Lev:{BTC_LEVERAGE}x (notional max(${MIN_NOTIONAL_USD:.0f}, ${BTC_MARGIN_USD}×lev)) | ALT: Margin ${ALT_TRADE_SIZE_USD} Lev:{ALT_LEVERAGE}x")
+    log("MAIN", f"BTC: Risk ${BTC_RISK_USD} Lev:{BTC_LEVERAGE}x | ALT: Size ${ALT_TRADE_SIZE_USD} Lev:{ALT_LEVERAGE}x")
     log("MAIN", f"V7 Modules: Sentiment + Order Flow + ML")
     log("MAIN", f"Fleet: INTERNAL (no cross-worker Redis)")
     log("MAIN", f"Redis: {'✅' if REDIS_URL else '⚠️ non configurato'}")
-    if ANTHROPIC_API_KEY:
-        log("MAIN", "AI: ✅ Anthropic API attiva — validazione segnali abilitata")
-    else:
-        log("MAIN", "AI: ⚠️ ANTHROPIC_API_KEY non impostata — bypass attivo (score neutro 5, size piena)")
-        tg("⚠️ <b>Bot avviato senza AI</b> — ANTHROPIC_API_KEY mancante.\nValidazione AI bypassata, score neutro 5, size piena.", silent=True)
 
     # Load persisted state
     load_state()
