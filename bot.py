@@ -86,6 +86,17 @@ SL_MIN_PCT = TREND_SL_MIN; SL_MAX_PCT = TREND_SL_MAX
 TRAILING_ACTIVATE = 0.3; TRAILING_ATR = TREND_TRAIL_ATR
 PARTIAL_CLOSE_PCT = 0.4
 TRAILING_STOP_INTERVAL = 20  # check trailing ogni 20s
+
+# ── ALT Profit Lock (scala SL minimo al crescere del PnL) ────────
+# Tupla (soglia_pnl, sl_minimo_garantito) — ordine crescente
+# es: se PnL tocca +10%, lo SL non scende MAI sotto entry+6%
+ALT_PROFIT_LOCK_LADDER = [
+    (0.03,  0.001),   # +3%  → lock break-even (+0.1%)
+    (0.05,  0.02),    # +5%  → lock +2%
+    (0.08,  0.04),    # +8%  → lock +4%
+    (0.10,  0.06),    # +10% → lock +6%
+    (0.15,  0.10),    # +15% → lock +10%
+]
 FUNDING_BLOCK_THRESH = 0.0003
 SLIPPAGE = 0.001; GTC_TIMEOUT = 6
 DRIFT_MAX_FAVORABLE = 0.004; DRIFT_MAX_ADVERSE = 0.008
@@ -3458,9 +3469,16 @@ def update_mechanical_trailing(coin, pos, mid, atr, direction, open_trade_meta,
     if is_long:
         new_ts = mid - trail_dist
         new_ts = max(new_ts, entry * 1.0005)  # min breakeven
+        # Rispetta profit lock: il trailing non scende mai sotto il lock
+        profit_lock_sl = meta.get("profit_lock_sl", 0.0)
+        if profit_lock_sl > 0:
+            new_ts = max(new_ts, profit_lock_sl)
     else:
         new_ts = mid + trail_dist
         new_ts = min(new_ts, entry * 0.9995)
+        profit_lock_sl = meta.get("profit_lock_sl", 0.0)
+        if profit_lock_sl > 0:
+            new_ts = min(new_ts, profit_lock_sl)
 
     new_ts = round_to_decimals(new_ts, px_dec.get(coin, 2))
     old_ts = meta.get("current_ts", 0)
@@ -6305,6 +6323,44 @@ def executor_thread_alt():
                                 log_err(f"[{coin}] smart tp: {e}")
                             continue
 
+                        # ── 2b. PROFIT LOCK: aggiorna peak_pnl e SL minimo garantito ──
+                        meta["peak_pnl"] = max(meta.get("peak_pnl", 0.0), pnl_ratio)
+                        peak = meta["peak_pnl"]
+
+                        # Calcola SL minimo in base al picco raggiunto
+                        lock_floor = 0.0
+                        for threshold, lock in ALT_PROFIT_LOCK_LADDER:
+                            if peak >= threshold:
+                                lock_floor = lock
+                        
+                        if lock_floor > 0:
+                            # SL minimo garantito = entry ± lock_floor
+                            if direction == "LONG":
+                                sl_lock_px = round_to_decimals(entry_px * (1 + lock_floor), px_decimals.get(coin, 4))
+                            else:
+                                sl_lock_px = round_to_decimals(entry_px * (1 - lock_floor), px_decimals.get(coin, 4))
+                            
+                            old_lock = meta.get("profit_lock_sl", 0.0)
+                            lock_improved = (direction == "LONG" and sl_lock_px > old_lock) or                                             (direction == "SHORT" and (old_lock == 0 or sl_lock_px < old_lock))
+                            
+                            if lock_improved:
+                                meta["profit_lock_sl"] = sl_lock_px
+                                # Aggiorna SL su exchange
+                                try:
+                                    sl_oid = meta.get("sl_oid")
+                                    if sl_oid:
+                                        try: cancel_order(coin, sl_oid)
+                                        except: pass
+                                    size_abs = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
+                                    call(_exchange.order, str(coin), direction != "LONG",
+                                         size_abs, sl_lock_px,
+                                         {"trigger": {"triggerPx": sl_lock_px, "isMarket": True, "tpsl": "sl"}},
+                                         True, timeout=15, label=f"lock_{coin}")
+                                    log_exec(f"[{coin}] 🔒 PROFIT LOCK: peak={peak:.1%} → SL garantito {sl_lock_px} (+{lock_floor:.1%} entry)")
+                                    tg(f"🔒 <b>{coin}</b> LOCK: peak +{peak:.1%} → SL protetto {lock_floor:.1%}", silent=True)
+                                except Exception as e:
+                                    log_err(f"[{coin}] profit lock SL: {e}")
+
                         # ── 3. Trailing (solo se non early cut e non smart TP) ──
                         if now - last_ts_update >= TRAILING_STOP_INTERVAL:
                             atr_approx = abs(float((get_all_signals().get(coin,{}) or {}).get("sl", mid_px)) - mid_px) / 1.2
@@ -6444,6 +6500,8 @@ def executor_thread_alt():
                             "partial_done":   False,
                             "trailing_active": False,
                             "current_ts":     0,
+                            "peak_pnl":       0.0,    # MFE tracker per profit lock
+                            "profit_lock_sl": 0.0,    # SL minimo garantito corrente
                         }
                         time.sleep(5)
 
