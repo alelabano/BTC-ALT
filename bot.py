@@ -3906,43 +3906,60 @@ Valuta SOLO: 1)Liquidità sufficiente? 2)BTC supporta? 3)Rischi wick/liquidazion
 
 JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio liquidazione/wick imminente>,"strategy":"{strategy}","mode":"SCALPING|SWING","reasoning":"<max 10 parole>"}}"""
 
+try:
         resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
+            "https://api.deepseek.com/chat/completions",
             headers={
-                "Content-Type":      "application/json",
-                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
-                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY', '')}"
             },
             json={
-                "model":      "claude-haiku-4-5-20251001",
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": "Sei un analista crypto. Rispondi solo in JSON."},
+                    {"role": "user", "content": prompt}
+                ],
                 "max_tokens": 400,
-                "messages":   [{"role": "user", "content": prompt}]
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"}
             },
             timeout=20
         )
+
         if resp.status_code != 200:
             log_err(f"[{coin}] AI HTTP {resp.status_code}: {resp.text[:100]}")
             return True, 0, "AI non disponibile", strategy, "SCALPING"
-        text   = resp.json().get("content", [{}])[0].get("text", "").strip()
+
+        # Estrazione corretta per DeepSeek
+        res_data = resp.json()
+        text = res_data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        
         result = _parse_ai_json(text)
-        score      = int(result.get("score", 5))
-        valid      = score >= 3
-        wait       = bool(result.get("wait", False))
-        reason     = result.get("reasoning", "")
-        ai_strategy = result.get("strategy", strategy)   # AI può sovrascrivere
+        
+        # Estrazione parametri dal JSON processato
+        score       = int(result.get("score", 5))
+        valid       = score >= 3
+        wait        = bool(result.get("wait", False))
+        reason      = result.get("reasoning", "")
+        ai_strategy = result.get("strategy", strategy)
         ai_mode     = result.get("mode", "SCALPING")
+
+        # Validazione logica dei valori ritornati
         if ai_strategy not in ("MEAN_REV", "TREND", "HYBRID"):
             ai_strategy = strategy
         if ai_mode not in ("SCALPING", "SWING"):
             ai_mode = "SCALPING"
+            
         if wait:
             valid  = False
             reason = f"⏳ {reason}"
+
         log_alt(f"[{coin}] AI → strategy:{ai_strategy} mode:{ai_mode} score:{score} | {reason}")
         return valid, score, reason, ai_strategy, ai_mode
+
     except Exception as e:
         log_err(f"[{coin}] ai_validate: {e}")
-        # Fail-open: se AI non risponde o risponde male, approva con score neutro
+        # Fail-open: approvazione cautelativa in caso di errore tecnico
         return True, 5, "AI fallback — approva", strategy, "SCALPING"
 
 def quick_backtest(df: pd.DataFrame, direction: str, coin: str = "",
