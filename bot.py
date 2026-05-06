@@ -1875,13 +1875,13 @@ def technical_trigger(r, r_prev, h_1h, allow_long=True, allow_short=True):
     # --- LOGICA PULLBACK STANDARD (ESISTENTE) ---
 
     # Pullback BUY: RSI oversold + MACD turning + trend 1h UP (non contro-trend)
-    if (allow_long and rsi < 40 and macd > macd_prev and vol >= 0.3
+    if (allow_long and rsi < 48 and macd > macd_prev and vol >= 0.3
         and trend_up and slope > -0.001):
         return {"direction": "LONG", "type": "PULLBACK",
                 "details": f"RSI:{rsi:.0f} MACD↑ vol:{vol:.1f}x trend:UP"}
 
     # Pullback SELL: RSI overbought + MACD turning + trend 1h DOWN
-    if (allow_short and rsi > 60 and macd < macd_prev and vol >= 0.3
+    if (allow_short and rsi > 52 and macd < macd_prev and vol >= 0.3
         and not trend_up and slope < 0.001):
         return {"direction": "SHORT", "type": "PULLBACK",
                 "details": f"RSI:{rsi:.0f} MACD↓ vol:{vol:.1f}x trend:DOWN"}
@@ -2000,11 +2000,11 @@ def check_signal():
     sent = get_sentiment_score()
     sent_neutral = 40 <= sent <= 60
     # Blocca solo se flow NEUTRO e mercato piatto (ADX<18) — sentiment non blocca da solo
-    if flow_neutral and adx1h < 18:
+    if flow_neutral and adx1h < 15:  # blocca solo mercati piattissimi (ADX<15)
         return None
 
     atr_pct = atr5 / px if px > 0 else 0
-    if atr_pct < 0.0015:
+    if atr_pct < 0.0003:  # ATR minimo 0.03% — BTC a $95k ha ATR ~$50-100 = 0.05-0.10%
         return None
 
     allow_long = True
@@ -4565,7 +4565,7 @@ def run_processor():
             prev_dir  = candidate.get("direction")
             prev_ts   = candidate.get("ts", 0)
             age       = time.time() - prev_ts
-            if age > PROCESSOR_INTERVAL * 3:
+            if age > PROCESSOR_INTERVAL * 8:  # candidato valido 4 min invece di 90s
                 candidate = {}
 
             if not candidate or prev_dir != direction:
@@ -4625,8 +4625,8 @@ def run_processor():
                 })
 
                 # PF >= 1.2 → skip double confirmation
-                if bt["profit_factor"] >= 1.2:
-                    log_alt(f"[{coin}] ⚡ PF:{bt['profit_factor']:.2f} >= 1.2 — skip double confirm")
+                if bt["profit_factor"] >= 1.0:
+                    log_alt(f"[{coin}] ⚡ PF:{bt['profit_factor']:.2f} >= 1.0 — skip double confirm")
                     candidate = get_candidate(coin)  # reload with backtest data
                 else:
                     log_alt(f"[{coin}] ⏳ Candidato salvato [{signal_type}] [{pre_mode}]")
