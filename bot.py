@@ -1113,6 +1113,19 @@ def ml_load_model_alt():
         _ml_model_alt.from_dict(d)
         log_alt(f"[ML-ALT] Loaded: {_ml_model_alt.n_samples} samples, acc:{_ml_model_alt.get_accuracy():.0%}")
 
+def is_valid_coin(coin: str) -> bool:
+    """Filtra asset non tradabili: indici interni Hyperliquid (#N, numeri puri), spot (@), k-token."""
+    if not coin or not isinstance(coin, str):
+        return False
+    if coin in COIN_BLACKLIST:
+        return False
+    if coin.startswith(("@", "#", "k")):
+        return False
+    if coin.isdigit():  # numeri puri tipo "40", "41"
+        return False
+    return True
+
+
 def encode_regime(regime):
     return {"BULL": 1.0, "BEAR": -1.0, "RANGE": 0.0}.get(regime, 0.0)
 
@@ -6041,7 +6054,7 @@ def run_scanner():
 
     for asset, ctx in zip(meta_assets, ctxs_main):
         coin = asset["name"]
-        if coin in COIN_BLACKLIST or coin.startswith("@") or coin.startswith("#") or coin.startswith("k"):
+        if not is_valid_coin(coin):
             continue
         try:
             px     = float(ctx.get("markPx", 0) or 0)
@@ -6299,9 +6312,7 @@ def fast_track_thread():
                     px = float(px_str)
                     if px <= 0:
                         continue
-                    if coin in COIN_BLACKLIST:
-                        continue
-                    if coin.startswith("@") or coin.startswith("#"):
+                    if not is_valid_coin(coin):
                         continue
 
                     prev = _fast_track_prev_prices.get(coin, 0)
