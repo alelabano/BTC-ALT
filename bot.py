@@ -21,7 +21,7 @@ BTC engine genera regime/bias → ALT engine lo legge in-memory.
 Variabili d'ambiente:
   PRIVATE_KEY, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
   UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
-  DEEPSEEK_API_KEY, CRYPTOCOMPARE_API_KEY
+  ANTHROPIC_API_KEY, CRYPTOCOMPARE_API_KEY
   ACCOUNT_CAPITAL_USD (default 1000)
   COINGECKO_API_KEY (opzionale)
 """
@@ -41,25 +41,20 @@ from hyperliquid.utils import constants
 # ================================================================
 # CONFIGURAZIONE GLOBALE
 # ================================================================
-PRIVATE_KEY       = os.getenv("PRIVATE_KEY")
-TG_TOKEN          = os.getenv("TELEGRAM_TOKEN", "")
-TG_CHAT_ID        = os.getenv("TELEGRAM_CHAT_ID", "")
-REDIS_URL         = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
-REDIS_TOKEN       = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+PRIVATE_KEY = os.getenv("PRIVATE_KEY")
+TG_TOKEN    = os.getenv("TELEGRAM_TOKEN", "")
+TG_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID", "")
+REDIS_URL   = os.getenv("UPSTASH_REDIS_REST_URL", "").rstrip("/")
+REDIS_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
 
 if not PRIVATE_KEY:
     print("❌ PRIVATE_KEY mancante"); sys.exit(1)
 
-if not DEEPSEEK_API_KEY:
-    print("⚠️  DEEPSEEK_API_KEY mancante — le funzioni AI useranno il fallback meccanico")
-
 # ── BTC Scalper Config ───────────────────────────────────────────
 BTC_COIN = "BTC"
-BTC_LEVERAGE = 12
-BTC_MARGIN_USD = 1.2       # margine per trade BTC — notional = BTC_MARGIN_USD × leva effettiva
-MIN_NOTIONAL_USD = 10.0    # Hyperliquid minimum $10 notional (shared BTC + ALT)
-BTC_MAX_POSITIONS = 6
+BTC_LEVERAGE = 5
+BTC_RISK_USD = 2.5
+BTC_MAX_POSITIONS = 2
 BTC_COOLDOWN_SEC = 180
 BTC_COOLDOWN_AFTER_LOSS = 300  # 5 min dopo un loss
 MAX_TRADES_PER_HOUR = 20
@@ -85,32 +80,21 @@ SL_ATR_MULT = TREND_SL_ATR; TP_RR = TREND_TP_RR
 SL_MIN_PCT = TREND_SL_MIN; SL_MAX_PCT = TREND_SL_MAX
 TRAILING_ACTIVATE = 0.3; TRAILING_ATR = TREND_TRAIL_ATR
 PARTIAL_CLOSE_PCT = 0.4
-TRAILING_STOP_INTERVAL = 20  # check trailing ogni 20s
-
-# ── ALT Profit Lock (scala SL minimo al crescere del PnL) ────────
-# Tupla (soglia_pnl, sl_minimo_garantito) — ordine crescente
-# es: se PnL tocca +10%, lo SL non scende MAI sotto entry+6%
-ALT_PROFIT_LOCK_LADDER = [
-    (0.03,  0.001),   # +3%  → lock break-even (+0.1%)
-    (0.05,  0.02),    # +5%  → lock +2%
-    (0.08,  0.04),    # +8%  → lock +4%
-    (0.10,  0.06),    # +10% → lock +6%
-    (0.15,  0.10),    # +15% → lock +10%
-]
+TRAILING_STOP_INTERVAL = 15  # check trailing ogni 20s
 FUNDING_BLOCK_THRESH = 0.0003
 SLIPPAGE = 0.001; GTC_TIMEOUT = 6
 DRIFT_MAX_FAVORABLE = 0.004; DRIFT_MAX_ADVERSE = 0.008
 PENDING_ORDER_TTL = 120
-MAX_DAILY_LOSS = 10.0; MAX_CONSEC_LOSS = 6
+MAX_DAILY_LOSS = 20.0; MAX_CONSEC_LOSS = 4
 DAILY_REPORT_HOUR = 0
 CONFIRMATION_SECONDS = 2
 
-FIRST_ENTRY_SIZE_PCT = 1
+FIRST_ENTRY_SIZE_PCT = 0.5
 SECOND_ENTRY_ENABLED = True
 
 TIME_STOP_SECONDS = 20
 FAST_EXIT_NEGATIVE = True
-FAST_EXIT_THRESHOLD = -0.03  # ROE approx
+FAST_EXIT_THRESHOLD = -0.02  # ROE approx
 
 # ── Altcoin Processor Config ────────────────────────────────────
 TIMEFRAME_TREND = "1h"; TIMEFRAME_SETUP = "15m"; TIMEFRAME_ENTRY = "5m"
@@ -124,21 +108,21 @@ MIN_BACKTEST_TRADES = 20; VOLATILITY_MIN = 0.0015
 DEFAULT_CAPITAL = float(os.getenv("ACCOUNT_CAPITAL_USD", "1000"))
 API_TIMEOUT_SEC = 2; PROCESSOR_INTERVAL = 1 * 30
 ALT_FUNDING_HISTORY_LEN = 42
-FAST_EXIT_THRESHOLD_ALT = -0.1  # -10% ROE (approx)
+FAST_EXIT_THRESHOLD_ALT = -0.05  # -5% ROE (approx)
 MOMENTUM_MULT_ALT = 1.2
 CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 
 # ── Unified Executor Config ─────────────────────────────────────
-ALT_MAX_CONCURRENT = 4         # max altcoin positions
-ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
-ALT_LEVERAGE = 12
+ALT_MAX_CONCURRENT = 2         # max altcoin positions
+ALT_TRADE_SIZE_USD = 5.0  # overridden by balance % in execute
+ALT_LEVERAGE = 5
 ALT_CHECK_INTERVAL = 2
 ALT_SIGNAL_MAX_AGE = 3 * 60
 SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
 META_REFRESH_CYCLES = 2
 ENTRY_POLL_ATTEMPTS = 2; ENTRY_POLL_INTERVAL = 0.2
 COIN_COOLDOWN_MR = 3600; COIN_COOLDOWN_TREND = 14400; COIN_COOLDOWN = 3600
-SETUP_SCORE_MIN = 45  # soglia minima: trend(30) + spread ok(15) = 45 base senza AI
+SETUP_SCORE_MIN = 20
 ALT_TRAILING_INTERVAL = 10  # ALT trailing check ogni 30s
 SCANNER_INTERVAL = 2 * 60; SCANNER_MAX_UNIVERSE = 229
 PROCESSOR_MAX_COINS = 30
@@ -1875,13 +1859,13 @@ def technical_trigger(r, r_prev, h_1h, allow_long=True, allow_short=True):
     # --- LOGICA PULLBACK STANDARD (ESISTENTE) ---
 
     # Pullback BUY: RSI oversold + MACD turning + trend 1h UP (non contro-trend)
-    if (allow_long and rsi < 48 and macd > macd_prev and vol >= 0.3
+    if (allow_long and rsi < 40 and macd > macd_prev and vol >= 0.3
         and trend_up and slope > -0.001):
         return {"direction": "LONG", "type": "PULLBACK",
                 "details": f"RSI:{rsi:.0f} MACD↑ vol:{vol:.1f}x trend:UP"}
 
     # Pullback SELL: RSI overbought + MACD turning + trend 1h DOWN
-    if (allow_short and rsi > 52 and macd < macd_prev and vol >= 0.3
+    if (allow_short and rsi > 60 and macd < macd_prev and vol >= 0.3
         and not trend_up and slope < 0.001):
         return {"direction": "SHORT", "type": "PULLBACK",
                 "details": f"RSI:{rsi:.0f} MACD↓ vol:{vol:.1f}x trend:DOWN"}
@@ -1990,8 +1974,7 @@ def check_signal():
     details = ""
     size_mult = 1.0
 
-    # RANGE_LOW_VOL blocca, ma non se c'è un vero spike di volume (vol_rel > 2)
-    if regime == "RANGE_LOW_VOL" and vol5 < 2.0:
+    if regime == "RANGE_LOW_VOL":
         return None
 
     # Environment check
@@ -1999,12 +1982,11 @@ def check_signal():
     flow_neutral = flow_sig_check.get("bias", "NEUTRAL") == "NEUTRAL"
     sent = get_sentiment_score()
     sent_neutral = 40 <= sent <= 60
-    # Blocca solo se flow NEUTRO e mercato piatto (ADX<18) — sentiment non blocca da solo
-    if flow_neutral and adx1h < 15:  # blocca solo mercati piattissimi (ADX<15)
+    if flow_neutral and sent_neutral and adx1h < 20:
         return None
 
     atr_pct = atr5 / px if px > 0 else 0
-    if atr_pct < 0.0003:  # ATR minimo 0.03% — BTC a $95k ha ATR ~$50-100 = 0.05-0.10%
+    if atr_pct < 0.0015:
         return None
 
     allow_long = True
@@ -2095,8 +2077,8 @@ def check_signal():
     sl_dist = atr5 * 1.2
     sl_dist = max(sl_dist, px * 0.004)   # floor 0.4% — minimo assoluto
     sl_dist = min(sl_dist, px * 0.015)   # cap 1.5% — non troppo largo
-    tp1_dist = max(px * 0.005, sl_dist * 1.2)   # TP1 = almeno 1.2× SL
-    tp2_dist = max(px * 0.008, sl_dist * 2.0)   # TP2 = almeno 2× SL — garantisce R:R > 1
+    tp1_dist = px * 0.005   # 0.5%
+    tp2_dist = px * 0.008   # 0.8%
 
     tp1_dist = max(tp1_dist, px * 0.003)
     tp2_dist = max(tp2_dist, px * 0.005)
@@ -2113,8 +2095,8 @@ def check_signal():
 
     fee_cost = px * 0.001
     effective_rr = (tp2_dist - fee_cost) / (sl_dist + fee_cost)
-    if effective_rr < 1.2:
-        log_btc(f"❌ R:R {effective_rr:.2f} < 1.2 — skip")
+    if effective_rr < 0.8:
+        log_btc(f"❌ R:R {effective_rr:.2f} < 0.8 — skip")
         return None
 
     if direction == "LONG":
@@ -2611,25 +2593,21 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
     try:
         is_long = direction == "LONG"
 
-        # ── LEVERAGE: imposta prima per ottenere la leva effettiva ──
-        try: call(_exchange.update_leverage, min(BTC_LEVERAGE, get_max_leverage()), BTC_COIN, is_cross=False, timeout=10)
-        except: pass
-
-        # ── SIZE: margine × leva effettiva, con floor $10 notional ──
-        # notional = max(MIN_NOTIONAL_USD, BTC_MARGIN_USD × leva_effettiva)
-        # size (coin) = notional / entry_px
-        effective_lev = BTC_LEVERAGE  # leva richiesta (max già cap-pata sopra)
-        notional = max(MIN_NOTIONAL_USD, BTC_MARGIN_USD * effective_lev)
-        margin_used = notional / effective_lev
-
+        # ── SIZE: fisso $5 notional ──
+        BTC_MARGIN = 5.0
+        notional = BTC_MARGIN * BTC_LEVERAGE  # $5 margin × 5x = $25 notional
+        
         bal = get_balance()
-        if margin_used > bal * 0.9:
-            log_btc(f"❌ Balance ${bal:.2f} insufficiente — margin richiesto ${margin_used:.2f} (notional ${notional:.2f})")
+        if notional / BTC_LEVERAGE > bal * 0.9:
+            log_btc(f"❌ Balance ${bal:.2f} insufficiente per ${notional} notional")
             return False
         size = rpx(notional / entry_px, sz_dec)
         if size <= 0:
-            log_btc(f"Size zero: notional=${notional:.2f} entry={entry_px}"); return False
-        log_btc(f"💰 SIZE: margin=${margin_used:.2f} × leva={effective_lev}x → notional=${notional:.2f} → {size} BTC")
+            log_btc(f"Size zero: notional=${notional:.0f}"); return False
+
+        # ── LEVERAGE ──
+        try: call(_exchange.update_leverage, min(BTC_LEVERAGE, get_max_leverage()), BTC_COIN, is_cross=False, timeout=10)
+        except: pass
 
         # ── ENTRY: aggressivo al mid — filla subito ──
         mid = get_mid()
@@ -3471,16 +3449,9 @@ def update_mechanical_trailing(coin, pos, mid, atr, direction, open_trade_meta,
     if is_long:
         new_ts = mid - trail_dist
         new_ts = max(new_ts, entry * 1.0005)  # min breakeven
-        # Rispetta profit lock: il trailing non scende mai sotto il lock
-        profit_lock_sl = meta.get("profit_lock_sl", 0.0)
-        if profit_lock_sl > 0:
-            new_ts = max(new_ts, profit_lock_sl)
     else:
         new_ts = mid + trail_dist
         new_ts = min(new_ts, entry * 0.9995)
-        profit_lock_sl = meta.get("profit_lock_sl", 0.0)
-        if profit_lock_sl > 0:
-            new_ts = min(new_ts, profit_lock_sl)
 
     new_ts = round_to_decimals(new_ts, px_dec.get(coin, 2))
     old_ts = meta.get("current_ts", 0)
@@ -3572,49 +3543,6 @@ def _parse_ai_json(text: str) -> dict:
             if depth == 0:
                 return json.loads(text[start:i+1])
     raise ValueError("JSON non chiuso correttamente")
-
-
-
-def _call_deepseek(prompt: str, max_tokens: int = 400, label: str = "") -> str:
-    """
-    Chiamata centralizzata all API Anthropic.
-    Ritorna il testo della risposta oppure None se fallisce.
-    Logga il motivo esatto dell errore (chiave mancante, 401, 429, timeout, ecc.)
-    """
-    if not DEEPSEEK_API_KEY:
-        log_err(f"[{label}] AI non disponibile: DEEPSEEK_API_KEY non impostata")
-        return None
-    try:
-        resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers={
-                "Content-Type":      "application/json",
-                "Authorization":     f"Bearer {DEEPSEEK_API_KEY}",
-            },
-            json={
-                "model":      "deepseek-chat",
-                "max_tokens": max_tokens,
-                "messages":   [{"role": "user", "content": prompt}]
-            },
-            timeout=20
-        )
-        if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        if resp.status_code == 401:
-            log_err(f"[{label}] AI errore 401 — DEEPSEEK_API_KEY non valida o scaduta")
-        elif resp.status_code == 429:
-            log_err(f"[{label}] AI errore 429 — rate limit DeepSeek raggiunto")
-        elif resp.status_code == 529:
-            log_err(f"[{label}] AI errore 529 — DeepSeek overloaded")
-        else:
-            log_err(f"[{label}] AI HTTP {resp.status_code}: {resp.text[:200]}")
-        return None
-    except requests.exceptions.Timeout:
-        log_err(f"[{label}] AI timeout (>20s)")
-        return None
-    except Exception as e:
-        log_err(f"[{label}] AI eccezione: {e}")
-        return None
 
 
 def fetch_liquidity_data(coin: str, px: float) -> dict:
@@ -3973,10 +3901,24 @@ Valuta SOLO: 1)Liquidità sufficiente? 2)BTC supporta? 3)Rischi wick/liquidazion
 
 JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio liquidazione/wick imminente>,"strategy":"{strategy}","mode":"SCALPING|SWING","reasoning":"<max 10 parole>"}}"""
 
-        text = _call_deepseek(prompt, max_tokens=400, label=coin)
-        if text is None:
-            # API non disponibile: bypass AI con score neutro — size piena, nessuna penalità
-            return True, 5, "AI bypass (chiave non attiva)", strategy, "SCALPING"
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type":      "application/json",
+                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model":      "claude-haiku-4-5-20251001",
+                "max_tokens": 400,
+                "messages":   [{"role": "user", "content": prompt}]
+            },
+            timeout=20
+        )
+        if resp.status_code != 200:
+            log_err(f"[{coin}] AI HTTP {resp.status_code}: {resp.text[:100]}")
+            return True, 0, "AI non disponibile", strategy, "SCALPING"
+        text   = resp.json().get("content", [{}])[0].get("text", "").strip()
         result = _parse_ai_json(text)
         score      = int(result.get("score", 5))
         valid      = score >= 3
@@ -4565,7 +4507,7 @@ def run_processor():
             prev_dir  = candidate.get("direction")
             prev_ts   = candidate.get("ts", 0)
             age       = time.time() - prev_ts
-            if age > PROCESSOR_INTERVAL * 8:  # candidato valido 4 min invece di 90s
+            if age > PROCESSOR_INTERVAL * 3:
                 candidate = {}
 
             if not candidate or prev_dir != direction:
@@ -4625,8 +4567,8 @@ def run_processor():
                 })
 
                 # PF >= 1.2 → skip double confirmation
-                if bt["profit_factor"] >= 1.0:
-                    log_alt(f"[{coin}] ⚡ PF:{bt['profit_factor']:.2f} >= 1.0 — skip double confirm")
+                if bt["profit_factor"] >= 1.2:
+                    log_alt(f"[{coin}] ⚡ PF:{bt['profit_factor']:.2f} >= 1.2 — skip double confirm")
                     candidate = get_candidate(coin)  # reload with backtest data
                 else:
                     log_alt(f"[{coin}] ⏳ Candidato salvato [{signal_type}] [{pre_mode}]")
@@ -5181,17 +5123,14 @@ def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
         log_err(f"[{coin}] SHORT SL/TP incoerenti (e:{entry_px} sl:{sl_px} tp:{tp_px})")
         return False
 
-    # Size calcolata sul nozionale — margine × leva effettiva, floor MIN_NOTIONAL_USD ($10)
-    # notional = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD × LEVERAGE)
-    notional_target = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * LEVERAGE)
-    size_nominal = round_to_decimals(notional_target / entry_px, sz_dec)
+    # Size calcolata sul nozionale — $4 margine × 20x leva — Hyperliquid min $10 nominale
+    size_nominal = round_to_decimals((TRADE_SIZE_USD * LEVERAGE) / entry_px, sz_dec)
     if size_nominal <= 0:
         return False
 
-    if size_nominal * entry_px < MIN_NOTIONAL_USD:
-        log_err(f"[{coin}] Notional insufficiente ({size_nominal} × {entry_px:.4f} = {size_nominal * entry_px:.2f} < {MIN_NOTIONAL_USD})")
+    if size_nominal * entry_px < 10.0:
+        log_err(f"[{coin}] Size nominale insufficiente ({size_nominal} * {entry_px:.4f} = {size_nominal * entry_px:.2f})")
         return False
-    log_exec(f"[{coin}] 💰 SIZE: margin=${TRADE_SIZE_USD:.2f} × leva={LEVERAGE}x → notional=${notional_target:.2f} → {size_nominal}")
 
     log_exec(f"[{coin}] {direction} entry:{entry_px} sl:{sl_px} tp:{tp_px} size:{size_nominal}")
 
@@ -5241,13 +5180,11 @@ def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
                 ts_dist_old = abs(entry_px - round_to_decimals(ts_raw, effective_px_dec))
                 ts_raw = entry_px - ts_dist_old * lev_scale if is_buy else entry_px + ts_dist_old * lev_scale
 
-            # Ricalcola size con leva effettiva (mantiene floor MIN_NOTIONAL_USD)
-            notional_actual = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * actual_lev)
-            size_nominal = round_to_decimals(notional_actual / entry_px, sz_dec)
-            if size_nominal <= 0 or size_nominal * entry_px < MIN_NOTIONAL_USD:
-                log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: notional=${size_nominal * entry_px:.2f}")
+            # Ricalcola size con leva effettiva
+            size_nominal = round_to_decimals((TRADE_SIZE_USD * actual_lev) / entry_px, sz_dec)
+            if size_nominal <= 0 or size_nominal * entry_px < 10.0:
+                log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: {size_nominal * entry_px:.2f}")
                 return False
-            log_exec(f"[{coin}] 💰 Ricalcolo: margin=${TRADE_SIZE_USD:.2f} × leva={actual_lev}x → notional=${notional_actual:.2f} → {size_nominal}")
 
             sl_pct = abs(entry_px - sl_px) / entry_px * 100
             tp_pct = abs(tp_px - entry_px) / entry_px * 100
@@ -5462,13 +5399,14 @@ Rispondi SOLO con JSON:
 }}"""
 
         resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
+            "https://api.anthropic.com/v1/messages",
             headers={
                 "Content-Type":      "application/json",
-                "Authorization":     f"Bearer {DEEPSEEK_API_KEY}",
+                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
+                "anthropic-version": "2023-06-01",
             },
             json={
-                "model":      "deepseek-chat",
+                "model":      "claude-haiku-4-5-20251001",
                 "max_tokens": 300,
                 "messages":   [{"role": "user", "content": prompt}]
             },
@@ -5478,7 +5416,7 @@ Rispondi SOLO con JSON:
         if resp.status_code != 200:
             return {"move": True, "new_ts": new_ts_mech, "reasoning": "fallback meccanico", "sentiment": "neutral"}
 
-        text   = resp.json()["choices"][0]["message"]["content"].strip()
+        text   = resp.json().get("content", [{}])[0].get("text", "").strip()
         result = _parse_ai_json(text)
         move      = bool(result.get("move", True))
         new_ts    = float(result.get("new_ts", new_ts_mech))
@@ -5552,13 +5490,14 @@ Rispondi SOLO con JSON:
 }}"""
 
         resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
+            "https://api.anthropic.com/v1/messages",
             headers={
                 "Content-Type":      "application/json",
-                "Authorization":     f"Bearer {DEEPSEEK_API_KEY}",
+                "x-api-key":         os.getenv("ANTHROPIC_API_KEY", ""),
+                "anthropic-version": "2023-06-01",
             },
             json={
-                "model":      "deepseek-chat",
+                "model":      "claude-haiku-4-5-20251001",
                 "max_tokens": 300,
                 "messages":   [{"role": "user", "content": prompt}]
             },
@@ -5566,10 +5505,9 @@ Rispondi SOLO con JSON:
         )
 
         if resp.status_code != 200:
-            log_err(f"[{coin}] ai_should_exit_early HTTP {resp.status_code}: {resp.text[:100]}")
-            return False, "AI bypass (chiave non attiva)"
+            return False, "AI non disponibile"
 
-        text   = resp.json()["choices"][0]["message"]["content"].strip()
+        text   = resp.json().get("content", [{}])[0].get("text", "").strip()
         result = _parse_ai_json(text)
 
         exit_now = bool(result.get("exit", False))
@@ -5842,7 +5780,7 @@ def run_scanner():
 
     for asset, ctx in zip(meta_assets, ctxs_main):
         coin = asset["name"]
-        if coin in COIN_BLACKLIST or coin.startswith("@") or coin.startswith("#") or coin.startswith("k"):
+        if coin in COIN_BLACKLIST or coin.startswith("@") or coin.startswith("k"):
             continue
         try:
             px     = float(ctx.get("markPx", 0) or 0)
@@ -6102,7 +6040,7 @@ def fast_track_thread():
                         continue
                     if coin in COIN_BLACKLIST:
                         continue
-                    if coin.startswith("@") or coin.startswith("#"):
+                    if coin.startswith("@"):
                         continue
 
                     prev = _fast_track_prev_prices.get(coin, 0)
@@ -6325,44 +6263,6 @@ def executor_thread_alt():
                                 log_err(f"[{coin}] smart tp: {e}")
                             continue
 
-                        # ── 2b. PROFIT LOCK: aggiorna peak_pnl e SL minimo garantito ──
-                        meta["peak_pnl"] = max(meta.get("peak_pnl", 0.0), pnl_ratio)
-                        peak = meta["peak_pnl"]
-
-                        # Calcola SL minimo in base al picco raggiunto
-                        lock_floor = 0.0
-                        for threshold, lock in ALT_PROFIT_LOCK_LADDER:
-                            if peak >= threshold:
-                                lock_floor = lock
-                        
-                        if lock_floor > 0:
-                            # SL minimo garantito = entry ± lock_floor
-                            if direction == "LONG":
-                                sl_lock_px = round_to_decimals(entry_px * (1 + lock_floor), px_decimals.get(coin, 4))
-                            else:
-                                sl_lock_px = round_to_decimals(entry_px * (1 - lock_floor), px_decimals.get(coin, 4))
-                            
-                            old_lock = meta.get("profit_lock_sl", 0.0)
-                            lock_improved = (direction == "LONG" and sl_lock_px > old_lock) or                                             (direction == "SHORT" and (old_lock == 0 or sl_lock_px < old_lock))
-                            
-                            if lock_improved:
-                                meta["profit_lock_sl"] = sl_lock_px
-                                # Aggiorna SL su exchange
-                                try:
-                                    sl_oid = meta.get("sl_oid")
-                                    if sl_oid:
-                                        try: cancel_order(coin, sl_oid)
-                                        except: pass
-                                    size_abs = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
-                                    call(_exchange.order, str(coin), direction != "LONG",
-                                         size_abs, sl_lock_px,
-                                         {"trigger": {"triggerPx": sl_lock_px, "isMarket": True, "tpsl": "sl"}},
-                                         True, timeout=15, label=f"lock_{coin}")
-                                    log_exec(f"[{coin}] 🔒 PROFIT LOCK: peak={peak:.1%} → SL garantito {sl_lock_px} (+{lock_floor:.1%} entry)")
-                                    tg(f"🔒 <b>{coin}</b> LOCK: peak +{peak:.1%} → SL protetto {lock_floor:.1%}", silent=True)
-                                except Exception as e:
-                                    log_err(f"[{coin}] profit lock SL: {e}")
-
                         # ── 3. Trailing (solo se non early cut e non smart TP) ──
                         if now - last_ts_update >= TRAILING_STOP_INTERVAL:
                             atr_approx = abs(float((get_all_signals().get(coin,{}) or {}).get("sl", mid_px)) - mid_px) / 1.2
@@ -6502,8 +6402,6 @@ def executor_thread_alt():
                             "partial_done":   False,
                             "trailing_active": False,
                             "current_ts":     0,
-                            "peak_pnl":       0.0,    # MFE tracker per profit lock
-                            "profit_lock_sl": 0.0,    # SL minimo garantito corrente
                         }
                         time.sleep(5)
 
@@ -6528,15 +6426,10 @@ def executor_thread_alt():
 
 def main():
     log("MAIN", "🚀 UNIFIED BOT — BTC Scalper V7 + Altcoin Processor")
-    log("MAIN", f"BTC: Margin ${BTC_MARGIN_USD} Lev:{BTC_LEVERAGE}x (notional max(${MIN_NOTIONAL_USD:.0f}, ${BTC_MARGIN_USD}×lev)) | ALT: Margin ${ALT_TRADE_SIZE_USD} Lev:{ALT_LEVERAGE}x")
+    log("MAIN", f"BTC: Risk ${BTC_RISK_USD} Lev:{BTC_LEVERAGE}x | ALT: Size ${ALT_TRADE_SIZE_USD} Lev:{ALT_LEVERAGE}x")
     log("MAIN", f"V7 Modules: Sentiment + Order Flow + ML")
     log("MAIN", f"Fleet: INTERNAL (no cross-worker Redis)")
     log("MAIN", f"Redis: {'✅' if REDIS_URL else '⚠️ non configurato'}")
-    if DEEPSEEK_API_KEY:
-        log("MAIN", "AI: ✅ DeepSeek API attiva — validazione segnali abilitata")
-    else:
-        log("MAIN", "AI: ⚠️ DEEPSEEK_API_KEY non impostata — bypass attivo (score neutro 5, size piena)")
-        tg("⚠️ <b>Bot avviato senza AI (DeepSeek)</b> — DEEPSEEK_API_KEY mancante.\nValidazione AI bypassata, score neutro 5, size piena.", silent=True)
 
     # Load persisted state
     load_state()
