@@ -146,6 +146,8 @@ BASE_MARGIN_USD = 1.0            # Margine base per trade ($1)
 LEVERAGE_OPTIONS = [5, 10, 15]
 BTC_BASE_MARGIN = 1.0
 ALT_MARGIN_PCT = 0.005
+_optimal_leverage_cache = {"btc": {"lev": 10, "ts": 0, "reasoning": ""}, "alt": {}}
+LEV_CACHE_TTL = 600
 # ── Missing aliases (ALT engine compatibility) ───────────────────
 TRADE_SIZE_USD = ALT_TRADE_SIZE_USD
 LEVERAGE = ALT_LEVERAGE
