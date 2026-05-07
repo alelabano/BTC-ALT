@@ -56,7 +56,6 @@ if not DEEPSEEK_API_KEY:
 
 # ── BTC Scalper Config ───────────────────────────────────────────
 BTC_COIN = "BTC"
-BTC_LEVERAGE = 12
 BTC_MARGIN_USD = 1.2       # margine per trade BTC — notional = BTC_MARGIN_USD × leva effettiva
 MIN_NOTIONAL_USD = 10.0    # Hyperliquid minimum $10 notional (shared BTC + ALT)
 BTC_MAX_POSITIONS = 6
@@ -131,7 +130,6 @@ CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 # ── Unified Executor Config ─────────────────────────────────────
 ALT_MAX_CONCURRENT = 4         # max altcoin positions
 ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
-ALT_LEVERAGE = 12
 ALT_CHECK_INTERVAL = 2
 ALT_SIGNAL_MAX_AGE = 3 * 60
 SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
@@ -143,6 +141,11 @@ ALT_TRAILING_INTERVAL = 10  # ALT trailing check ogni 30s
 SCANNER_INTERVAL = 2 * 60; SCANNER_MAX_UNIVERSE = 229
 PROCESSOR_MAX_COINS = 30
 CORRELATION_THRESHOLD = 0.55
+MIN_NOTIONAL_USD = 10.0          # Hyperliquid minimo assoluto
+BASE_MARGIN_USD = 1.0            # Margine base per trade ($1)
+LEVERAGE_OPTIONS = [5, 10, 15]
+BTC_BASE_MARGIN = 1.0
+ALT_MARGIN_PCT = 0.005
 # ── Missing aliases (ALT engine compatibility) ───────────────────
 TRADE_SIZE_USD = ALT_TRADE_SIZE_USD
 LEVERAGE = ALT_LEVERAGE
@@ -1692,6 +1695,208 @@ def update_regime():
     return _btc_regime
 
 # ================================================================
+# DYNAMIC LEVERAGE SELECTION (Market-Adaptive)
+# ================================================================
+
+def analyze_market_for_leverage(coin: str = "BTC") -> dict:
+    """
+    Analizza le condizioni di mercato e ritorna la leva ottimale.
+    
+    Criteri di selezione:
+    - Volatilità (ATR%): alta volatilità → leva bassa (5x)
+    - Trend strength (ADX): trend forte → leva media (10x)
+    - Volume spike: momentum forte → leva alta (15x)
+    - Spread/liquidità: scarso liquidity → leva bassa
+    - Funding rate: estremo → leva ridotta
+    
+    Returns: {
+        "recommended_leverage": int,
+        "reasoning": str,
+        "market_volatility": str,  # LOW, MEDIUM, HIGH
+        "trend_strength": str,     # WEAK, MODERATE, STRONG
+        "liquidity_score": float   # 0-1
+    }
+    """
+    try:
+        # Fetch dati necessari
+        df_15m = fetch_df(coin, "15m", 7)
+        if df_15m is None or len(df_15m) < 50:
+            return {"recommended_leverage": 10, "reasoning": "default (dati insufficienti)", 
+                    "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": 0.7}
+        
+        r = df_15m.iloc[-1]
+        px = float(r['close'])
+        atr = float(r['atr'])
+        atr_pct = atr / px if px > 0 else 0
+        
+        # 1. ANALISI VOLATILITÀ (ATR%)
+        if atr_pct > 0.015:      # >1.5% ATR = alta volatilità
+            vol_level = "HIGH"
+            vol_score = 0.2       # penalizza leva alta
+        elif atr_pct > 0.008:    # 0.8-1.5% = media volatilità
+            vol_level = "MEDIUM"
+            vol_score = 0.6
+        else:                     # <0.8% = bassa volatilità
+            vol_level = "LOW"
+            vol_score = 1.0        # favorisce leva alta
+        
+        # 2. ANALISI TREND STRENGTH (ADX)
+        adx = float(r.get('adx', 20))
+        if adx > 35:               # trend fortissimo
+            trend_level = "STRONG"
+            trend_score = 0.8
+        elif adx > 25:             # trend moderato
+            trend_level = "MODERATE"
+            trend_score = 1.0
+        elif adx > 18:             # trend debole
+            trend_level = "WEAK"
+            trend_score = 0.6
+        else:                      # ranging
+            trend_level = "RANGING"
+            trend_score = 0.3
+        
+        # 3. ANALISI VOLUME (momentum)
+        vol_rel = float(r.get('vol_rel', 1.0))
+        if vol_rel > 2.5:          # volume spike
+            volume_boost = 1.3
+        elif vol_rel > 1.5:        # volume alto
+            volume_boost = 1.1
+        elif vol_rel < 0.5:        # volume basso
+            volume_boost = 0.7
+        else:
+            volume_boost = 1.0
+        
+        # 4. ANALISI SPREAD (liquidità)
+        liq = fetch_liquidity_data(coin, px) if coin != "BTC" else fetch_liquidity()
+        spread = liq.get("spread_real", 0.001) if liq else 0.001
+        
+        if spread > 0.002:         # spread alto = scarsa liquidità
+            liquidity_score = 0.3
+            liq_level = "POOR"
+        elif spread > 0.001:       # spread medio
+            liquidity_score = 0.7
+            liq_level = "FAIR"
+        else:                      # spread basso = ottima liquidità
+            liquidity_score = 1.0
+            liq_level = "EXCELLENT"
+        
+        # 5. FUNDING RATE (crowding)
+        funding_z = get_funding_z() if coin == "BTC" else alt_get_funding_z(coin)
+        if abs(funding_z) > 2.0:   # funding estremo = crowded trade
+            funding_penalty = 0.6
+        elif abs(funding_z) > 1.0:
+            funding_penalty = 0.8
+        else:
+            funding_penalty = 1.0
+        
+        # ── CALCOLO SCORE COMPOSITO PER OGNI LEVA ──
+        leverage_scores = {}
+        
+        for lev in LEVERAGE_OPTIONS:
+            # Leva 5x: adatta a volatilità alta, trend debole
+            if lev == 5:
+                score = vol_score * 1.2 + trend_score * 0.6 + liquidity_score * 1.0
+                score *= volume_boost * funding_penalty
+                leverage_scores[5] = score
+            
+            # Leva 10x: bilanciata, per condizioni normali
+            elif lev == 10:
+                score = vol_score * 1.0 + trend_score * 1.0 + liquidity_score * 1.0
+                score *= volume_boost * funding_penalty
+                leverage_scores[10] = score
+            
+            # Leva 15x: aggressiva, per trend forti e bassa volatilità
+            elif lev == 15:
+                score = vol_score * 0.8 + trend_score * 1.2 + liquidity_score * 1.0
+                score *= volume_boost * funding_penalty
+                leverage_scores[15] = score
+        
+        # Scegli la leva con score più alto
+        best_lev = max(leverage_scores, key=leverage_scores.get)
+        
+        # Determinazione contesto per log
+        if vol_level == "HIGH" or liquidity_score < 0.5:
+            market_context = "cautelativo"
+        elif trend_level == "STRONG" and vol_level == "LOW":
+            market_context = "aggressivo"
+        else:
+            market_context = "normale"
+        
+        reasoning = f"leva {best_lev}x ({market_context}) | ATR:{atr_pct:.2%} ADX:{adx:.0f} Vol:{vol_rel:.1f}x Spread:{spread:.2%}"
+        
+        log_btc(f"[LEV] {reasoning}")
+        
+        return {
+            "recommended_leverage": best_lev,
+            "reasoning": reasoning,
+            "market_volatility": vol_level,
+            "trend_strength": trend_level,
+            "liquidity_score": round(liquidity_score, 2)
+        }
+        
+    except Exception as e:
+        log_btc(f"[LEV] Errore analisi: {e} → fallback 10x")
+        return {"recommended_leverage": 10, "reasoning": "fallback", 
+                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": 0.7}
+
+
+def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = None, 
+                         coin: str = "BTC", capital_usd: float = None) -> tuple:
+    """
+    Calcola la size del trade rispettando il minimo notional di $10.
+    
+    Args:
+        entry_px: Prezzo di entrata
+        leverage: Leva selezionata (5, 10, 15)
+        margin_usd: Margine in USD (se None, calcolato automaticamente)
+        coin: Simbolo (per log)
+        capital_usd: Capitale totale (per ALT, calcola margine %)
+    
+    Returns:
+        (size: float, margin_used: float, notional: float, sz_dec: int)
+    """
+    # Ottieni decimali per la coin
+    sz_dec = _btc_coin_meta.get("sz_dec", 5) if coin == "BTC" else 5
+    
+    # Calcola margine appropriato
+    if margin_usd is not None:
+        margin_used = margin_usd
+    elif coin == "BTC":
+        # BTC: margine fisso base
+        margin_used = BTC_BASE_MARGIN
+    else:
+        # ALT: percentuale del capitale
+        if capital_usd is None:
+            capital_usd = get_balance()
+        margin_used = max(0.5, capital_usd * ALT_MARGIN_PCT)
+    
+    # Calcola notional e verifica minimo $10
+    notional_raw = margin_used * leverage
+    notional = max(MIN_NOTIONAL_USD, notional_raw)
+    
+    # Se abbiamo dovuto alzare il notional, riduci il margine proporzionalmente
+    if notional > notional_raw:
+        margin_used = notional / leverage
+    
+    # Calcola size in coin
+    size = notional / entry_px if entry_px > 0 else 0
+    size = round_to_decimals(size, sz_dec)
+    
+    # Verifica finale: notional deve essere >= $10
+    final_notional = size * entry_px
+    if final_notional < MIN_NOTIONAL_USD - 0.01:
+        log_btc(f"⚠️ [{coin}] Notional too low: ${final_notional:.2f} < ${MIN_NOTIONAL_USD}")
+        # Forza size minima
+        min_size = MIN_NOTIONAL_USD / entry_px
+        size = round_to_decimals(min_size, sz_dec)
+        final_notional = size * entry_px
+        margin_used = final_notional / leverage
+    
+    log_btc(f"[SIZE] {coin} | lev:{leverage}x | margin:${margin_used:.2f} | notional:${final_notional:.2f} | size:{size}")
+    
+    return size, margin_used, final_notional, sz_dec
+                           
+# ================================================================
 # BACKTEST — testa i segnali esatti del bot su storico 5m
 # ================================================================
 _btc_bt_results = {}   # {"PULLBACK_LONG": {"pf":1.3, "wr":0.45, "n":80}, ...}
@@ -2747,9 +2952,6 @@ def is_funding_ok(direction):
 # ================================================================
 _btc_last_report_ts = 0
 def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mult=1.0, scalp_mode="TREND"):
-    """
-    Entry pulita: prezzo aggressivo → wait 2s → SL/TP da ATR → return pos_state o False
-    """
     global _btc_last_trade_ts, _btc_is_trading, _btc_sl_oid, _btc_tp_oid
 
     if _btc_is_trading:
@@ -2759,22 +2961,44 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
 
     try:
         is_long = direction == "LONG"
-
-        # ── LEVERAGE: imposta prima per ottenere la leva effettiva ──
-        try: call(_exchange.update_leverage, min(BTC_LEVERAGE, get_max_leverage()), BTC_COIN, is_cross=False, timeout=10)
-        except: pass
-
-        # ── SIZE: margine × leva effettiva, con floor $10 notional ──
-        # notional = max(MIN_NOTIONAL_USD, BTC_MARGIN_USD × leva_effettiva)
-        # size (coin) = notional / entry_px
-        effective_lev = BTC_LEVERAGE  # leva richiesta (max già cap-pata sopra)
-        notional = max(MIN_NOTIONAL_USD, BTC_MARGIN_USD * effective_lev)
-        margin_used = notional / effective_lev
-
+        
+        # ── ANALISI DINAMICA LEVA ──
+        lev_analysis = analyze_market_for_leverage("BTC")
+        selected_leverage = lev_analysis["recommended_leverage"]
+        
+        # Cap leva al massimo consentito dall'exchange
+        max_lev_allowed = get_max_leverage()
+        if selected_leverage > max_lev_allowed:
+            log_btc(f"⚠️ Leva {selected_leverage}x > max {max_lev_allowed}x → ridotta")
+            selected_leverage = max_lev_allowed
+        
+        # ── IMPOSTA LEVA ──
+        try:
+            call(_exchange.update_leverage, selected_leverage, BTC_COIN, is_cross=False, timeout=10)
+            log_btc(f"✅ Leva impostata: {selected_leverage}x")
+        except Exception as e:
+            log_btc(f"⚠️ Impostazione leva fallita: {e}")
+            selected_leverage = 10  # fallback safe
+        
+        # ── CALCOLA SIZE DINAMICA ──
+        size, margin_used, notional, _ = calculate_trade_size(entry_px, selected_leverage, coin="BTC")
+        
+        # Applica size_mult da segnale (se presente)
+        if size_mult != 1.0:
+            size = round_to_decimals(size * size_mult, sz_dec)
+            notional = size * entry_px
+            log_btc(f"💰 size_mult {size_mult:.1f}x applied → new size:{size} notional:${notional:.2f}")
+        
+        if size <= 0:
+            log_btc(f"Size zero: notional=${notional:.2f} entry={entry_px}")
+            return False
+        
+        # Verifica margine sufficiente
         bal = get_balance()
         if margin_used > bal * 0.9:
-            log_btc(f"❌ Balance ${bal:.2f} insufficiente — margin richiesto ${margin_used:.2f} (notional ${notional:.2f})")
+            log_btc(f"❌ Balance ${bal:.2f} insufficiente — margin richiesto ${margin_used:.2f}")
             return False
+        
         size = rpx(notional / entry_px, sz_dec)
         if size <= 0:
             log_btc(f"Size zero: notional=${notional:.2f} entry={entry_px}"); return False
@@ -2899,6 +3123,7 @@ def scanner_thread():
     log_btc("[SCAN] BTC Scanner avviato")
     ml_load_model()
     ml_load_model_alt()
+    
     # Carica adaptive params ALT per tutte le coin già note
     try:
         for coin_key in (_rget("alt:known_coins") or []):
@@ -2908,8 +3133,19 @@ def scanner_thread():
         log_alt(f"[BOOT] Loaded adaptive params for {len(_alt_params)} coins")
     except Exception as e:
         log_err(f"[BOOT] alt_params load: {e}")
+    
+    last_lev_refresh = 0  # <-- AGGIUNGI QUESTA LINEA
+    
     while True:
         try:
+            now = time.time()
+            
+            # ── REFRESH LEVA OTTIMALE ogni 10 min ──
+            if now - last_lev_refresh > LEV_CACHE_TTL:
+                lev_info = analyze_market_for_leverage("BTC")
+                last_lev_refresh = now
+                log_btc(f"[LEV] BTC optimal: {lev_info['recommended_leverage']}x | {lev_info.get('reasoning', '')[:60]}")
+            
             regime = update_regime()
             update_funding_oi()
             fz = get_funding_z()
@@ -5287,21 +5523,46 @@ def process_pending_orders(active_positions: dict, sz_dec: dict, px_dec: dict) -
 # EXECUTOR — OPEN TRADE
 # ================================================================
 
-def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bool:
+def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
     direction = signal.get("direction")
     if not direction:
         return False
     is_buy = (direction == "LONG")
 
     balance = get_account_balance()
-    if balance < (TRADE_SIZE_USD) * 1.1:
-        log_err(f"[{coin}] Balance ${balance:.2f} insufficiente")
+    
+    # ── ANALISI DINAMICA LEVA PER QUESTA COIN ──
+    lev_analysis = analyze_market_for_leverage(coin)
+    selected_leverage = lev_analysis["recommended_leverage"]
+    
+    # Cap leva a max 20x per ALT (sicurezza)
+    selected_leverage = min(selected_leverage, 20)
+    
+    # ── IMPOSTA LEVA ──
+    try:
+        call(_exchange.update_leverage, selected_leverage, str(coin), is_cross=False, timeout=10)
+        log_exec(f"[{coin}] Leva impostata: {selected_leverage}x | {lev_analysis['reasoning']}")
+    except Exception as e:
+        log_err(f"[{coin}] Impostazione leva fallita: {e}")
+        selected_leverage = 10
+    
+    # ── CALCOLA SIZE CON LEVA DINAMICA ──
+    size, margin_used, notional, _ = calculate_trade_size(
+        float(mids.get(coin, 0)), 
+        selected_leverage, 
+        coin=coin, 
+        capital_usd=balance
+    )
+    
+    # Verifica margine
+    if margin_used > balance * 0.9:
+        log_err(f"[{coin}] Margine insufficiente: need ${margin_used:.2f} have ${balance:.2f}")
         return False
-
-    mid_px = float(mids.get(coin, 0) or 0)
-    if mid_px <= 0:
-        log_err(f"[{coin}] Prezzo non disponibile")
+    
+    if size <= 0 or notional < MIN_NOTIONAL_USD:
+        log_err(f"[{coin}] Size/notional insufficiente: size={size} notional=${notional:.2f}")
         return False
+    
 
     # ── PRICE DRIFT CHECK ─────────────────────────────────────────
     # Il segnale è stato generato a signal_px. Se il prezzo si è già mosso
