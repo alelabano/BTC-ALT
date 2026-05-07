@@ -5540,6 +5540,10 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     is_buy = (direction == "LONG")
 
     balance = get_account_balance()
+    mid_px = float(mids.get(coin, 0) or 0)
+    if mid_px <= 0:
+        log_err(f"[{coin}] Prezzo non disponibile")
+        return False
     
     # ── ANALISI DINAMICA LEVA PER QUESTA COIN ──
     lev_analysis = analyze_market_for_leverage(coin)
