@@ -66,7 +66,9 @@ BTC_SCAN_INTERVAL = 2
 BTC_SIGNAL_MAX_AGE = 30
 BTC_REGIME_INTERVAL = 300
 
-# ROE-based SL/TP — SL 
+# ROE-based SL/TP — SL
+BTC_LEVERAGE = 10   # default value, not used for live trading (dynamic leverage used)
+ALT_LEVERAGE = 10
 ROE_TP = 0.10; ROE_SL = 0.05  
 TP_PRICE_PCT = ROE_TP / BTC_LEVERAGE  # 0.003 = 0.3%
 SL_PRICE_PCT = ROE_SL / BTC_LEVERAGE  # 0.003 = 0.3%
