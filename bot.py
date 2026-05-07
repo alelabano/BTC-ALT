@@ -1843,7 +1843,8 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
 
 
 def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = None, 
-                         coin: str = "BTC", capital_usd: float = None) -> tuple:
+                         coin: str = "BTC", capital_usd: float = None, 
+                         size_mult: float = 1.0) -> tuple:
     """
     Calcola la size del trade rispettando il minimo notional di $10.
     
@@ -1883,6 +1884,7 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     # Calcola size in coin
     size = notional / entry_px if entry_px > 0 else 0
     size = round_to_decimals(size, sz_dec)
+
     
     # Verifica finale: notional deve essere >= $10
     final_notional = size * entry_px
@@ -1895,6 +1897,16 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
         margin_used = final_notional / leverage
     
     log_btc(f"[SIZE] {coin} | lev:{leverage}x | margin:${margin_used:.2f} | notional:${final_notional:.2f} | size:{size}")
+    
+    if size_mult != 1.0:
+        margin_used *= size_mult
+        notional = margin_used * leverage
+        if notional < MIN_NOTIONAL_USD:
+            notional = MIN_NOTIONAL_USD
+            margin_used = notional / leverage
+        size = notional / entry_px
+        size = round_to_decimals(size, sz_dec)
+        final_notional = size * entry_px
     
     return size, margin_used, final_notional, sz_dec
                            
@@ -2977,19 +2989,14 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
         # ── IMPOSTA LEVA ──
         try:
             call(_exchange.update_leverage, selected_leverage, BTC_COIN, is_cross=False, timeout=10)
-            log_btc(f"✅ Leva impostata: {selected_leverage}x")
+            log_btc(f"✅ Leva impostata: {selected_leverage}x | {lev_analysis['reasoning']}")
         except Exception as e:
             log_btc(f"⚠️ Impostazione leva fallita: {e}")
             selected_leverage = 10  # fallback safe
         
-        # ── CALCOLA SIZE DINAMICA ──
-        size, margin_used, notional, _ = calculate_trade_size(entry_px, selected_leverage, coin="BTC")
+        # ── CALCOLA SIZE DINAMICA (già include size_mult) ──
+        size, margin_used, notional, _ = calculate_trade_size(entry_px, selected_leverage, coin="BTC", size_mult=size_mult)
         
-        # Applica size_mult da segnale (se presente)
-        if size_mult != 1.0:
-            size = round_to_decimals(size * size_mult, sz_dec)
-            notional = size * entry_px
-            log_btc(f"💰 size_mult {size_mult:.1f}x applied → new size:{size} notional:${notional:.2f}")
         
         if size <= 0:
             log_btc(f"Size zero: notional=${notional:.2f} entry={entry_px}")
@@ -3001,18 +3008,17 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
             log_btc(f"❌ Balance ${bal:.2f} insufficiente — margin richiesto ${margin_used:.2f}")
             return False
         
-        size = rpx(notional / entry_px, sz_dec)
-        if size <= 0:
-            log_btc(f"Size zero: notional=${notional:.2f} entry={entry_px}"); return False
-        log_btc(f"💰 SIZE: margin=${margin_used:.2f} × leva={effective_lev}x → notional=${notional:.2f} → {size} BTC")
+        log_btc(f"💰 SIZE: margin=${margin_used:.2f} × leva={selected_leverage}x → notional=${notional:.2f} → {size} BTC")
 
-        # ── ENTRY: aggressivo al mid — filla subito ──
+        # ── ENTRY: aggressivo al mid ──
         mid = get_mid()
         if mid <= 0:
-            log_btc("❌ get_mid() failed"); return False
+            log_btc("❌ get_mid() failed")
+            return False
 
         px = rpx(mid * (1.0003 if is_long else 0.9997), px_dec)
         log_btc(f"{'🟢' if is_long else '🔴'} ORDER {direction} [{scalp_mode}] @ {px} size:{size}")
+
 
         res = call(_exchange.order, BTC_COIN, is_long, size, px,
                    {"limit": {"tif": "Gtc"}}, False, timeout=15)
