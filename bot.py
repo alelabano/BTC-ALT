@@ -5533,7 +5533,7 @@ def process_pending_orders(active_positions: dict, sz_dec: dict, px_dec: dict) -
 # EXECUTOR — OPEN TRADE
 # ================================================================
 
-def open_trade(coin, signal, mids, sz_dec, px_dec) -> bool:
+def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bool:
     direction = signal.get("direction")
     if not direction:
         return False
