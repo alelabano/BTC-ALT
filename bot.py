@@ -1704,214 +1704,197 @@ def update_regime():
 
 def analyze_market_for_leverage(coin: str = "BTC") -> dict:
     """
-    Analizza le condizioni di mercato e ritorna la leva ottimale.
-    
-    Criteri di selezione:
-    - Volatilità (ATR%): alta volatilità → leva bassa (5x)
-    - Trend strength (ADX): trend forte → leva media (10x)
-    - Volume spike: momentum forte → leva alta (15x)
-    - Spread/liquidità: scarso liquidity → leva bassa
-    - Funding rate: estremo → leva ridotta
-    
-    Returns: {
-        "recommended_leverage": int,
-        "reasoning": str,
-        "market_volatility": str,  # LOW, MEDIUM, HIGH
-        "trend_strength": str,     # WEAK, MODERATE, STRONG
-        "liquidity_score": float   # 0-1
-    }
+    Pipeline in 3 step:
+      1. ANALISI MERCATO  — volatilità (ATR%), trend (ADX), volume (vol_rel), spread
+      2. DETERMINA LEVA   — regole hard priority + score composito → 5x | 10x | 15x
+      3. (caller)         — CALCOLA SIZE = max($10, margin × leva) / prezzo
+
+    Regole hard (priority order, applicate prima dello score):
+      • volatilità HIGH  (ATR% > 1.5%)       → forza 5x
+      • spread POOR      (spread > 0.2%)      → forza 5x
+      • funding estremo  (|z| > 2.0)          → forza 5x
+      • volume spike     (vol_rel > 2.5) AND
+        volatilità LOW   (ATR% < 0.8%)        → forza 15x
+      • trend STRONG     (ADX > 35) AND
+        volatilità LOW                         → forza 15x
+
+    Score composito (solo se nessuna regola hard si attiva):
+      • volatilità:  HIGH→0 | MEDIUM→0.5 | LOW→1.0
+      • trend:       RANGING→0 | WEAK→0.3 | MODERATE→0.7 | STRONG→1.0
+      • volume:      <0.5→-0.2 | 0.5-1.5→0 | >1.5→+0.3 | >2.5→+0.5
+      • liquidità:   POOR→-0.5 | FAIR→0 | EXCELLENT→+0.3
+      Soglie:  score < 0.4 → 5x | 0.4-0.75 → 10x | > 0.75 → 15x
     """
+    _default = {"recommended_leverage": 10, "reasoning": "default (dati insufficienti)",
+                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": 0.7}
     try:
-        # Fetch dati necessari
         df_15m = fetch_df(coin, "15m", 7)
         if df_15m is None or len(df_15m) < 50:
-            return {"recommended_leverage": 10, "reasoning": "default (dati insufficienti)", 
-                    "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": 0.7}
-        
-        r = df_15m.iloc[-1]
-        px = float(r['close'])
-        atr = float(r['atr'])
+            return _default
+
+        r       = df_15m.iloc[-1]
+        px      = float(r['close'])
+        atr     = float(r['atr'])
         atr_pct = atr / px if px > 0 else 0
-        
-        # 1. ANALISI VOLATILITÀ (ATR%)
-        if atr_pct > 0.015:      # >1.5% ATR = alta volatilità
+
+        # ── STEP 1: ANALISI MERCATO ──────────────────────────────────
+
+        # Volatilità
+        if atr_pct > 0.015:
             vol_level = "HIGH"
-            vol_score = 0.2       # penalizza leva alta
-        elif atr_pct > 0.008:    # 0.8-1.5% = media volatilità
+        elif atr_pct > 0.008:
             vol_level = "MEDIUM"
-            vol_score = 0.6
-        else:                     # <0.8% = bassa volatilità
+        else:
             vol_level = "LOW"
-            vol_score = 1.0        # favorisce leva alta
-        
-        # 2. ANALISI TREND STRENGTH (ADX)
+
+        # Trend (ADX)
         adx = float(r.get('adx', 20))
-        if adx > 35:               # trend fortissimo
+        if adx > 35:
             trend_level = "STRONG"
-            trend_score = 0.8
-        elif adx > 25:             # trend moderato
+        elif adx > 25:
             trend_level = "MODERATE"
-            trend_score = 1.0
-        elif adx > 18:             # trend debole
+        elif adx > 18:
             trend_level = "WEAK"
-            trend_score = 0.6
-        else:                      # ranging
+        else:
             trend_level = "RANGING"
-            trend_score = 0.3
-        
-        # 3. ANALISI VOLUME (momentum)
+
+        # Volume
         vol_rel = float(r.get('vol_rel', 1.0))
-        if vol_rel > 2.5:          # volume spike
-            volume_boost = 1.3
-        elif vol_rel > 1.5:        # volume alto
-            volume_boost = 1.1
-        elif vol_rel < 0.5:        # volume basso
-            volume_boost = 0.7
+
+        # Spread / liquidità
+        try:
+            liq    = fetch_liquidity_data(coin, px) if coin != "BTC" else fetch_liquidity()
+            spread = liq.get("spread_real", 0.001) if liq else 0.001
+        except Exception:
+            spread = 0.001
+
+        if spread > 0.002:
+            liq_level     = "POOR"
+            liquidity_score = 0.0
+        elif spread > 0.001:
+            liq_level     = "FAIR"
+            liquidity_score = 0.5
         else:
-            volume_boost = 1.0
-        
-        # 4. ANALISI SPREAD (liquidità)
-        liq = fetch_liquidity_data(coin, px) if coin != "BTC" else fetch_liquidity()
-        spread = liq.get("spread_real", 0.001) if liq else 0.001
-        
-        if spread > 0.002:         # spread alto = scarsa liquidità
-            liquidity_score = 0.3
-            liq_level = "POOR"
-        elif spread > 0.001:       # spread medio
-            liquidity_score = 0.7
-            liq_level = "FAIR"
-        else:                      # spread basso = ottima liquidità
+            liq_level     = "EXCELLENT"
             liquidity_score = 1.0
-            liq_level = "EXCELLENT"
-        
-        # 5. FUNDING RATE (crowding)
-        funding_z = get_funding_z() if coin == "BTC" else alt_get_funding_z(coin)
-        if abs(funding_z) > 2.0:   # funding estremo = crowded trade
-            funding_penalty = 0.6
-        elif abs(funding_z) > 1.0:
-            funding_penalty = 0.8
-        else:
-            funding_penalty = 1.0
-        
-        # ── CALCOLO SCORE COMPOSITO PER OGNI LEVA ──
-        leverage_scores = {}
-        
-        for lev in LEVERAGE_OPTIONS:
-            # Leva 5x: adatta a volatilità alta, trend debole
-            if lev == 5:
-                score = vol_score * 1.2 + trend_score * 0.6 + liquidity_score * 1.0
-                score *= volume_boost * funding_penalty
-                leverage_scores[5] = score
-            
-            # Leva 10x: bilanciata, per condizioni normali
-            elif lev == 10:
-                score = vol_score * 1.0 + trend_score * 1.0 + liquidity_score * 1.0
-                score *= volume_boost * funding_penalty
-                leverage_scores[10] = score
-            
-            # Leva 15x: aggressiva, per trend forti e bassa volatilità
-            elif lev == 15:
-                score = vol_score * 0.8 + trend_score * 1.2 + liquidity_score * 1.0
-                score *= volume_boost * funding_penalty
-                leverage_scores[15] = score
-        
-        # Scegli la leva con score più alto
-        best_lev = max(leverage_scores, key=leverage_scores.get)
-        
-        # Determinazione contesto per log
-        if vol_level == "HIGH" or liquidity_score < 0.5:
-            market_context = "cautelativo"
+
+        # Funding
+        try:
+            funding_z = get_funding_z() if coin == "BTC" else alt_get_funding_z(coin)
+        except Exception:
+            funding_z = 0.0
+
+        # ── STEP 2: DETERMINA LEVA ───────────────────────────────────
+
+        # — Regole hard (in ordine di priorità decrescente) —
+        hard_reason = ""
+        best_lev    = 0   # 0 = nessuna regola hard attivata
+
+        if vol_level == "HIGH":
+            best_lev    = 5
+            hard_reason = f"volatilità ALTA (ATR {atr_pct:.2%})"
+        elif liq_level == "POOR":
+            best_lev    = 5
+            hard_reason = f"spread ALTO ({spread:.2%})"
+        elif abs(funding_z) > 2.0:
+            best_lev    = 5
+            hard_reason = f"funding estremo (z={funding_z:+.1f})"
+        elif vol_level == "LOW" and vol_rel > 2.5:
+            best_lev    = 15
+            hard_reason = f"volume spike ({vol_rel:.1f}x) + bassa volatilità"
         elif trend_level == "STRONG" and vol_level == "LOW":
-            market_context = "aggressivo"
-        else:
-            market_context = "normale"
-        
-        reasoning = f"leva {best_lev}x ({market_context}) | ATR:{atr_pct:.2%} ADX:{adx:.0f} Vol:{vol_rel:.1f}x Spread:{spread:.2%}"
-        
+            best_lev    = 15
+            hard_reason = f"trend STRONG (ADX {adx:.0f}) + bassa volatilità"
+
+        # — Score composito (solo se nessuna regola hard) —
+        if best_lev == 0:
+            vol_score   = {"LOW": 1.0, "MEDIUM": 0.5, "HIGH": 0.0}[vol_level]
+            trend_score = {"RANGING": 0.0, "WEAK": 0.3, "MODERATE": 0.7, "STRONG": 1.0}[trend_level]
+            vol_bonus   = 0.5 if vol_rel > 2.5 else 0.3 if vol_rel > 1.5 else 0.0 if vol_rel >= 0.5 else -0.2
+            liq_bonus   = 0.3 if liq_level == "EXCELLENT" else 0.0 if liq_level == "FAIR" else -0.5
+
+            score = vol_score * 0.40 + trend_score * 0.35 + vol_bonus * 0.15 + liq_bonus * 0.10
+
+            if score > 0.75:
+                best_lev    = 15
+                hard_reason = f"score {score:.2f} → aggressivo"
+            elif score >= 0.40:
+                best_lev    = 10
+                hard_reason = f"score {score:.2f} → normale"
+            else:
+                best_lev    = 5
+                hard_reason = f"score {score:.2f} → cautelativo"
+
+        reasoning = (f"leva {best_lev}x | {hard_reason} | "
+                     f"ATR:{atr_pct:.2%} ADX:{adx:.0f} Vol:{vol_rel:.1f}x "
+                     f"Spread:{spread:.2%} FZ:{funding_z:+.1f}")
+
         log_btc(f"[LEV] {reasoning}")
-        
+
         return {
             "recommended_leverage": best_lev,
-            "reasoning": reasoning,
-            "market_volatility": vol_level,
-            "trend_strength": trend_level,
-            "liquidity_score": round(liquidity_score, 2)
+            "reasoning":            reasoning,
+            "market_volatility":    vol_level,
+            "trend_strength":       trend_level,
+            "liquidity_score":      round(liquidity_score, 2),
         }
-        
+
     except Exception as e:
         log_btc(f"[LEV] Errore analisi: {e} → fallback 10x")
-        return {"recommended_leverage": 10, "reasoning": "fallback", 
-                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": 0.7}
+        return {"recommended_leverage": 10, "reasoning": f"fallback ({e})",
+                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": 0.5}
 
 
-def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = None, 
-                         coin: str = "BTC", capital_usd: float = None, 
+def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = None,
+                         coin: str = "BTC", capital_usd: float = None,
                          size_mult: float = 1.0) -> tuple:
     """
-    Calcola la size del trade rispettando il minimo notional di $10.
-    
-    Args:
-        entry_px: Prezzo di entrata
-        leverage: Leva selezionata (5, 10, 15)
-        margin_usd: Margine in USD (se None, calcolato automaticamente)
-        coin: Simbolo (per log)
-        capital_usd: Capitale totale (per ALT, calcola margine %)
-    
-    Returns:
-        (size: float, margin_used: float, notional: float, sz_dec: int)
+    STEP 3 della pipeline leverage:
+        size = max($10, margin × leva) / prezzo
+
+    Il size_mult (da ML/AI) viene applicato sul MARGINE prima di tutto,
+    in modo che la formula rimanga coerente.
+
+    Returns: (size, margin_used, notional, sz_dec)
     """
-    # Ottieni decimali per la coin
     sz_dec = _btc_coin_meta.get("sz_dec", 5) if coin == "BTC" else 5
-    
-    # Calcola margine appropriato
+
+    # Determina margine base
     if margin_usd is not None:
-        margin_used = margin_usd
+        margin_base = margin_usd
     elif coin == "BTC":
-        # BTC: margine fisso base
-        margin_used = BTC_BASE_MARGIN
+        margin_base = BTC_BASE_MARGIN
     else:
-        # ALT: percentuale del capitale
         if capital_usd is None:
             capital_usd = get_balance()
-        margin_used = max(0.5, capital_usd * ALT_MARGIN_PCT)
-    
-    # Calcola notional e verifica minimo $10
-    notional_raw = margin_used * leverage
-    notional = max(MIN_NOTIONAL_USD, notional_raw)
-    
-    # Se abbiamo dovuto alzare il notional, riduci il margine proporzionalmente
-    if notional > notional_raw:
+        margin_base = max(0.5, capital_usd * ALT_MARGIN_PCT)
+
+    # Applica size_mult sul margine (prima di tutto il resto)
+    margin_used = margin_base * size_mult
+
+    # Formula canonica: notional = max($10, margin × leva)
+    notional = max(MIN_NOTIONAL_USD, margin_used * leverage)
+
+    # Se il floor $10 ha alzato il notional, adegua il margine di conseguenza
+    if notional > margin_used * leverage:
         margin_used = notional / leverage
-    
-    # Calcola size in coin
+
+    # Size in coin
     size = notional / entry_px if entry_px > 0 else 0
     size = round_to_decimals(size, sz_dec)
 
-    
-    # Verifica finale: notional deve essere >= $10
+    # Verifica finale (arrotondamento può abbassare di poco)
     final_notional = size * entry_px
     if final_notional < MIN_NOTIONAL_USD - 0.01:
-        log_btc(f"⚠️ [{coin}] Notional too low: ${final_notional:.2f} < ${MIN_NOTIONAL_USD}")
-        # Forza size minima
         min_size = MIN_NOTIONAL_USD / entry_px
         size = round_to_decimals(min_size, sz_dec)
         final_notional = size * entry_px
         margin_used = final_notional / leverage
-    
-    log_btc(f"[SIZE] {coin} | lev:{leverage}x | margin:${margin_used:.2f} | notional:${final_notional:.2f} | size:{size}")
-    
-    if size_mult != 1.0:
-        margin_used *= size_mult
-        notional = margin_used * leverage
-        if notional < MIN_NOTIONAL_USD:
-            notional = MIN_NOTIONAL_USD
-            margin_used = notional / leverage
-        size = notional / entry_px
-        size = round_to_decimals(size, sz_dec)
-        final_notional = size * entry_px
-    
+
+    log_btc(f"[SIZE] {coin} | lev:{leverage}x | margin:${margin_used:.2f} × mult:{size_mult:.2f} "
+            f"| notional:${final_notional:.2f} | size:{size}")
+
     return size, margin_used, final_notional, sz_dec
-                           
 # ================================================================
 # BACKTEST — testa i segnali esatti del bot su storico 5m
 # ================================================================
@@ -3790,13 +3773,6 @@ def dynamic_sl_tp(px, atr, volatility, direction, df: pd.DataFrame = None,
     # Floor: TP almeno 0.3% del prezzo (altrimenti non copre nemmeno lo spread)
     tp_floor = px * 0.003
     tp_dist  = max(tp_dist, tp_floor)
-
-    # ── CAP SL: massimo -20% dal prezzo (SL fisso assoluto) ──────
-    SL_MAX_DIST_PCT = 0.20   # 20% price-based (non ROE)
-    sl_dist_cap = px * SL_MAX_DIST_PCT
-    if sl_dist > sl_dist_cap:
-        log_alt(f"[{coin}] ⚠️ SL capped a -20% ({sl_dist/px*100:.2f}% → 20%)")
-        sl_dist = sl_dist_cap
 
     # Log per debug
     sl_pct = sl_dist / px * 100
@@ -6865,59 +6841,6 @@ def executor_thread_alt():
                                 except Exception as e:
                                     log_err(f"[{coin}] profit lock SL: {e}")
 
-                        # ── 2c. TP DINAMICO — può solo avvicinarsi, mai allontanarsi ──
-                        # Se il prezzo si è mosso favorevolmente, stringe il TP
-                        # per consolidare il profitto. Il TP non si allontana mai.
-                        try:
-                            sig_tp = meta.get("signal", {})
-                            tp_original = float(sig_tp.get("tp", 0) or 0)
-                            tp_oid = meta.get("tp_oid")
-                            px_d = px_decimals.get(coin, 4)
-
-                            if tp_original > 0 and pnl_ratio > 0.001:
-                                # Calcola nuovo TP candidato: mid ± metà della distanza residua al TP
-                                if direction == "LONG":
-                                    dist_to_tp = tp_original - mid_px
-                                    if dist_to_tp > 0:
-                                        # Nuovo TP = avanza del 40% della distanza residua
-                                        new_tp_candidate = round_to_decimals(
-                                            mid_px + dist_to_tp * 0.60, px_d)
-                                        old_tp_meta = meta.get("current_tp", tp_original)
-                                        # Solo se il nuovo TP è MINORE del vecchio (si avvicina)
-                                        if new_tp_candidate < old_tp_meta and new_tp_candidate > mid_px:
-                                            if tp_oid:
-                                                try: cancel_order(coin, tp_oid)
-                                                except: pass
-                                            szi_abs = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
-                                            call(_exchange.order, str(coin), True,  # sell
-                                                 szi_abs, new_tp_candidate,
-                                                 {"trigger": {"triggerPx": new_tp_candidate, "isMarket": True, "tpsl": "tp"}},
-                                                 True, timeout=15, label=f"dtp_{coin}")
-                                            meta["current_tp"] = new_tp_candidate
-                                            tp_move_pct = (old_tp_meta - new_tp_candidate) / entry_px * 100
-                                            log_exec(f"[{coin}] 🎯 TP avvicinato: {old_tp_meta:.4g} → {new_tp_candidate:.4g} ({tp_move_pct:.2f}% più vicino)")
-                                else:  # SHORT
-                                    dist_to_tp = mid_px - tp_original
-                                    if dist_to_tp > 0:
-                                        new_tp_candidate = round_to_decimals(
-                                            mid_px - dist_to_tp * 0.60, px_d)
-                                        old_tp_meta = meta.get("current_tp", tp_original)
-                                        # Solo se il nuovo TP è MAGGIORE del vecchio (si avvicina)
-                                        if new_tp_candidate > old_tp_meta and new_tp_candidate < mid_px:
-                                            if tp_oid:
-                                                try: cancel_order(coin, tp_oid)
-                                                except: pass
-                                            szi_abs = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
-                                            call(_exchange.order, str(coin), False,  # buy
-                                                 szi_abs, new_tp_candidate,
-                                                 {"trigger": {"triggerPx": new_tp_candidate, "isMarket": True, "tpsl": "tp"}},
-                                                 True, timeout=15, label=f"dtp_{coin}")
-                                            meta["current_tp"] = new_tp_candidate
-                                            tp_move_pct = (new_tp_candidate - old_tp_meta) / entry_px * 100
-                                            log_exec(f"[{coin}] 🎯 TP avvicinato: {old_tp_meta:.4g} → {new_tp_candidate:.4g} ({tp_move_pct:.2f}% più vicino)")
-                        except Exception as e:
-                            log_err(f"[{coin}] dynamic tp: {e}")
-
                         # ── 3. Trailing (solo se non early cut e non smart TP) ──
                         if now - last_ts_update >= TRAILING_STOP_INTERVAL:
                             atr_approx = abs(float((get_all_signals().get(coin,{}) or {}).get("sl", mid_px)) - mid_px) / 1.2
@@ -7062,7 +6985,6 @@ def executor_thread_alt():
                             "partial_done":     False,
                             "trailing_active":  False,
                             "current_ts":       0,
-                            "current_tp":       float(sig.get("tp", 0) or 0),  # TP dinamico: punto di partenza
                             "peak_pnl":         0.0,
                             "worst_pnl":        0.0,   # MAE tracker
                             "profit_lock_sl":   0.0,
