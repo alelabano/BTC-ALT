@@ -3791,6 +3791,13 @@ def dynamic_sl_tp(px, atr, volatility, direction, df: pd.DataFrame = None,
     tp_floor = px * 0.003
     tp_dist  = max(tp_dist, tp_floor)
 
+    # ── CAP SL: massimo -20% dal prezzo (SL fisso assoluto) ──────
+    SL_MAX_DIST_PCT = 0.20   # 20% price-based (non ROE)
+    sl_dist_cap = px * SL_MAX_DIST_PCT
+    if sl_dist > sl_dist_cap:
+        log_alt(f"[{coin}] ⚠️ SL capped a -20% ({sl_dist/px*100:.2f}% → 20%)")
+        sl_dist = sl_dist_cap
+
     # Log per debug
     sl_pct = sl_dist / px * 100
     tp_pct = tp_dist / px * 100
@@ -6858,6 +6865,59 @@ def executor_thread_alt():
                                 except Exception as e:
                                     log_err(f"[{coin}] profit lock SL: {e}")
 
+                        # ── 2c. TP DINAMICO — può solo avvicinarsi, mai allontanarsi ──
+                        # Se il prezzo si è mosso favorevolmente, stringe il TP
+                        # per consolidare il profitto. Il TP non si allontana mai.
+                        try:
+                            sig_tp = meta.get("signal", {})
+                            tp_original = float(sig_tp.get("tp", 0) or 0)
+                            tp_oid = meta.get("tp_oid")
+                            px_d = px_decimals.get(coin, 4)
+
+                            if tp_original > 0 and pnl_ratio > 0.001:
+                                # Calcola nuovo TP candidato: mid ± metà della distanza residua al TP
+                                if direction == "LONG":
+                                    dist_to_tp = tp_original - mid_px
+                                    if dist_to_tp > 0:
+                                        # Nuovo TP = avanza del 40% della distanza residua
+                                        new_tp_candidate = round_to_decimals(
+                                            mid_px + dist_to_tp * 0.60, px_d)
+                                        old_tp_meta = meta.get("current_tp", tp_original)
+                                        # Solo se il nuovo TP è MINORE del vecchio (si avvicina)
+                                        if new_tp_candidate < old_tp_meta and new_tp_candidate > mid_px:
+                                            if tp_oid:
+                                                try: cancel_order(coin, tp_oid)
+                                                except: pass
+                                            szi_abs = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
+                                            call(_exchange.order, str(coin), True,  # sell
+                                                 szi_abs, new_tp_candidate,
+                                                 {"trigger": {"triggerPx": new_tp_candidate, "isMarket": True, "tpsl": "tp"}},
+                                                 True, timeout=15, label=f"dtp_{coin}")
+                                            meta["current_tp"] = new_tp_candidate
+                                            tp_move_pct = (old_tp_meta - new_tp_candidate) / entry_px * 100
+                                            log_exec(f"[{coin}] 🎯 TP avvicinato: {old_tp_meta:.4g} → {new_tp_candidate:.4g} ({tp_move_pct:.2f}% più vicino)")
+                                else:  # SHORT
+                                    dist_to_tp = mid_px - tp_original
+                                    if dist_to_tp > 0:
+                                        new_tp_candidate = round_to_decimals(
+                                            mid_px - dist_to_tp * 0.60, px_d)
+                                        old_tp_meta = meta.get("current_tp", tp_original)
+                                        # Solo se il nuovo TP è MAGGIORE del vecchio (si avvicina)
+                                        if new_tp_candidate > old_tp_meta and new_tp_candidate < mid_px:
+                                            if tp_oid:
+                                                try: cancel_order(coin, tp_oid)
+                                                except: pass
+                                            szi_abs = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
+                                            call(_exchange.order, str(coin), False,  # buy
+                                                 szi_abs, new_tp_candidate,
+                                                 {"trigger": {"triggerPx": new_tp_candidate, "isMarket": True, "tpsl": "tp"}},
+                                                 True, timeout=15, label=f"dtp_{coin}")
+                                            meta["current_tp"] = new_tp_candidate
+                                            tp_move_pct = (new_tp_candidate - old_tp_meta) / entry_px * 100
+                                            log_exec(f"[{coin}] 🎯 TP avvicinato: {old_tp_meta:.4g} → {new_tp_candidate:.4g} ({tp_move_pct:.2f}% più vicino)")
+                        except Exception as e:
+                            log_err(f"[{coin}] dynamic tp: {e}")
+
                         # ── 3. Trailing (solo se non early cut e non smart TP) ──
                         if now - last_ts_update >= TRAILING_STOP_INTERVAL:
                             atr_approx = abs(float((get_all_signals().get(coin,{}) or {}).get("sl", mid_px)) - mid_px) / 1.2
@@ -7002,6 +7062,7 @@ def executor_thread_alt():
                             "partial_done":     False,
                             "trailing_active":  False,
                             "current_ts":       0,
+                            "current_tp":       float(sig.get("tp", 0) or 0),  # TP dinamico: punto di partenza
                             "peak_pnl":         0.0,
                             "worst_pnl":        0.0,   # MAE tracker
                             "profit_lock_sl":   0.0,
