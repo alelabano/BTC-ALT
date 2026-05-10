@@ -2797,9 +2797,14 @@ def recover_position(sz_dec, px_dec):
     has_sl = any(o.get("coin") == BTC_COIN and o.get("orderType") == "Stop Market" for o in orders)
     has_tp = any(o.get("coin") == BTC_COIN and o.get("orderType") == "Take Profit Market" for o in orders)
 
+    # Inizializza variabili con valori predefiniti (caso SL/TP già esistenti)
+    sl_px = 0
+    tp_px = 0
+    tp1_px = 0
+
     if not has_sl:
-        # Emergency SL at 3× SL_MAX_PCT (wide, just protection)
-        emergency_dist = entry * 0.01  # 1%
+        # ⚠️ CORREZIONE: Emergency SL al 20% (protezione catastrofica)
+        emergency_dist = entry * 0.20  # 20% - ampio ma evita liquidazione totale
         if d == "LONG":
             sl_px = rpx(entry - emergency_dist, px_dec)
         else:
@@ -2811,11 +2816,13 @@ def recover_position(sz_dec, px_dec):
             call(_exchange.order, BTC_COIN, not is_buy, size_abs, sl_px,
                  {"trigger": {"triggerPx": sl_px, "isMarket": True, "tpsl": "sl"}},
                  True, timeout=15)
-            log_btc(f"🚨 EMERGENCY SL placed @ {sl_px}")
-            tg(f"🚨 <b>BTC</b> restart — emergency SL @ {sl_px}")
+            log_btc(f"🚨 EMERGENCY SL placed @ {sl_px} (20% catastrofico)")
+            tg(f"🚨 <b>BTC</b> restart — emergency SL @ {sl_px} (20%)")
         except Exception as e:
             log_btc(f"🚨 EMERGENCY SL FAILED: {e}")
             tg(f"🚨🚨 BTC NO SL — MANUAL CHECK!")
+    else:
+        log_btc(f"✅ SL già presente — nessuna azione")
 
     if not has_tp:
         # Piazza TP a 2×ATR (o 2% se ATR non disponibile)
@@ -2835,11 +2842,11 @@ def recover_position(sz_dec, px_dec):
                  {"trigger": {"triggerPx": tp_px, "isMarket": True, "tpsl": "tp"}},
                  True, timeout=15)
             log_btc(f"🎯 Recovery TP placed @ {tp_px}")
+            tp1_px = rpx(entry + atr_r * 1.2 if d == "LONG" else entry - atr_r * 1.2, px_dec)
         except Exception as e:
             log_btc(f"⚠️ Recovery TP failed: {e}")
-        tp1_px = rpx(entry + atr_r * 1.2 if d == "LONG" else entry - atr_r * 1.2, px_dec)
     else:
-        tp1_px = 0
+        log_btc(f"✅ TP già presente — nessuna azione")
 
     pos_state = {
         "coin": BTC_COIN,
@@ -2850,8 +2857,8 @@ def recover_position(sz_dec, px_dec):
         "szi": szi,
         "open_ts": time.time(),
         "entry_time": time.time(),
-        "sl_px": sl_px if not has_sl else 0,
-        "tp_px": tp_px if not has_tp else 0,
+        "sl_px": sl_px,
+        "tp_px": tp_px,
         "tp1_px": tp1_px,
         "sl_dist": entry * 0.012,
         "sl_oid": None,
