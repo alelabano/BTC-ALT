@@ -1215,20 +1215,6 @@ def compute_hourly_bias():
 
     # ── Trade in loss = segnale direzionale forte ──
     pos = get_position()
-    if pos:
-        entry = pos["entry"]
-        mid = get_mid()
-        d = "LONG" if pos["szi"] > 0 else "SHORT"
-        pnl_pct = ((mid - entry) / entry if d == "LONG" else (entry - mid) / entry)
-        if pnl_pct < -0.003:  # in loss > -0.3%
-            # Trade LONG in loss → mercato scende → SHORT per ALT
-            if d == "LONG":
-                bias = "SHORT_BIAS"; reason = f"BTC LONG in loss {pnl_pct:+.2%} → mercato scende"
-            else:
-                bias = "LONG_BIAS"; reason = f"BTC SHORT in loss {pnl_pct:+.2%} → mercato sale"
-            fleet_set_bias(bias, reason)
-            log_btc(f"Fleet: {bias} | {reason}")
-            return bias
 
     # ── Momentum standard ──
     if mom_15m > 0.0015:
@@ -1246,6 +1232,20 @@ def compute_hourly_bias():
     log_btc(f"Fleet: {bias} | {reason}")
     return bias
 
+    if pos:
+        entry = pos["entry"]
+        mid = get_mid()
+        d = "LONG" if pos["szi"] > 0 else "SHORT"
+        pnl_pct = ((mid - entry) / entry if d == "LONG" else (entry - mid) / entry)
+        if pnl_pct < -0.015:  
+            # Trade LONG in loss → mercato scende → SHORT per ALT
+            if d == "LONG":
+                bias = "SHORT_BIAS"; reason = f"BTC LONG in loss {pnl_pct:+.2%} → mercato scende"
+            else:
+                bias = "LONG_BIAS"; reason = f"BTC SHORT in loss {pnl_pct:+.2%} → mercato sale"
+            fleet_set_bias(bias, reason)
+            log_btc(f"Fleet: {bias} | {reason}")
+            return bias
 
 # ================================================================
 # BTC STATE MANAGEMENT
