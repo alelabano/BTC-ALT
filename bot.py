@@ -2983,8 +2983,8 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
             call(_exchange.update_leverage, selected_leverage, BTC_COIN, is_cross=False, timeout=10)
             log_btc(f"✅ Leva impostata: {selected_leverage}x | {lev_analysis['reasoning']}")
         except Exception as e:
-            log_btc(f"⚠️ Impostazione leva fallita: {e}")
-            selected_leverage = 10  # fallback safe
+            log_btc(f"❌ Impostazione leva isolated fallita: {e} — trade annullato")
+            return False
         
         # ── CALCOLA SIZE DINAMICA (già include size_mult) ──
         size, margin_used, notional, _ = calculate_trade_size(entry_px, selected_leverage, coin="BTC", size_mult=size_mult)
@@ -3080,7 +3080,7 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
         tp_pct = abs(tp_px - entry_real) / entry_real * 100
         log_btc(f"✅ FILLED @ {entry_real} size:{size_real} SL:{sl_px}({sl_pct:.2f}%) TP:{tp_px}({tp_pct:.2f}%)")
         tg(f"{'🟢' if is_long else '🔴'} <b>BTC {direction}</b> @ {entry_real}\n"
-           f"SL:{sl_px} ({sl_pct:.1f}%) | TP:{tp_px} ({tp_pct:.1f}%)\nSize:{size_real}")
+           f"SL: disabilitato | TP:{tp_px} ({tp_pct:.1f}%)\nSize:{size_real}")
         return True
 
     except Exception as e:
@@ -5548,8 +5548,8 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         call(_exchange.update_leverage, selected_leverage, str(coin), is_cross=False, timeout=10)
         log_exec(f"[{coin}] Leva impostata: {selected_leverage}x | {lev_analysis['reasoning']}")
     except Exception as e:
-        log_err(f"[{coin}] Impostazione leva fallita: {e}")
-        selected_leverage = 10
+        log_err(f"[{coin}] Impostazione leva isolated fallita: {e} — trade annullato")
+        return False
     
     # ── CALCOLA SIZE CON LEVA DINAMICA ──
     size, margin_used, notional, _ = calculate_trade_size(
@@ -5839,7 +5839,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
                       {"trigger": {"triggerPx": tp_px, "isMarket": True, "tpsl": "tp"}},
                       True, timeout=15, label=f'tp_{coin}')
 
-        sl_ok = True  # [NO_SL]
+        sl_ok = False  # [NO_SL]
         tp_ok = tp_res and tp_res.get("status") == "ok"
 
         if ts_raw > 0:
@@ -5863,7 +5863,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         tg(
             f"{'🟢' if is_buy else '🔴'} <b>{coin} {direction} APERTO</b> [{m.get('signal_type','?')}] [{m.get('scalp_mode','?')}] 🏆\n"
             f"Entry: <b>{filled_entry}</b> | Size: {actual_size}\n"
-            f"SL: {sl_px} ({sl_pct:.2f}%) {'✅' if sl_ok else '❌'} | TP: {tp_px} ({tp_pct:.2f}%) {'✅' if tp_ok else '❌'}\n"
+            f"SL: disabilitato | TP: {tp_px} ({tp_pct:.2f}%) {'✅' if tp_ok else '❌'}\n"
             f"Rank: <b>{m.get('rank_score',0):.3f}</b> | Score: {m.get('setup_score',0)}/100 | AI: {m.get('ai_score',0)}/10\n"
             f"PF: <b>{m.get('pf',0):.2f}</b> | WR: {m.get('wr',0):.1%} | Regime: {m.get('regime','?')}\n"
             f"RSI:{m.get('rsi',0):.1f} | BB:{m.get('bb_pos',0):.2f} | Vol:{m.get('vol_rel',0):.2f}x | FZ:{m.get('funding_z',0):+.2f}\n"
@@ -6773,20 +6773,8 @@ def executor_thread_alt():
                         meta = open_trade_meta.get(coin, {})
                         trade_age = now - meta.get("ts_open", now)
 
-                        # ── 1. EARLY CUT: loss > -0.2% dopo 30s → chiudi subito ──
-                        if pnl_ratio < -0.002 and trade_age > 30:
-                            log_exec(f"[{coin}] ✂️ EARLY CUT {pnl_ratio:+.2%}")
-                            actual_size = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
-                            try:
-                                close_px = round_to_decimals(mid_px * (0.995 if direction == "LONG" else 1.005), px_decimals.get(coin, 4))
-                                call(_exchange.order, str(coin), direction != "LONG",
-                                     actual_size, close_px,
-                                     {"limit": {"tif": "Ioc"}}, False, timeout=10)
-                                delete_signal(coin)
-                                tg(f"✂️ <b>{coin}</b> CUT {pnl_ratio:+.2%}", silent=True)
-                            except Exception as e:
-                                log_err(f"[{coin}] early cut: {e}")
-                            continue
+                        # ── 1. EARLY CUT disabilitato in modalità NO_SL ──
+                        # Non chiude automaticamente in perdita: l'uscita resta manuale/TP/smart TP.
 
                         # ── 2. SMART TP: in profitto >0.2% → prendi profitto ──
                         if pnl_ratio > 0.002 and trade_age > 60:
