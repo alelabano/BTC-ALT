@@ -5242,15 +5242,26 @@ def run_processor():
         log_alt(f"🏆 BEST SIGNAL: {coin_best} [{best['direction']}] [{best['signal_type']}] [{best['mode']}] "
               f"rank:{best['rank_score']:.3f} PF:{best['pf']:.2f} AI:{best['ai_score']}/10 "
               f"SL:{best['sl']} TP:{best['tp']}")
-        tg(
-            f"{'🟢' if best['direction']=='LONG' else '🔴'} <b>{coin_best}</b> "
-            f"[{best['direction']}] [{best['signal_type']}] [{best['mode']}] 🏆\n"
-            f"Rank: <b>{best['rank_score']:.3f}</b> | Score: {best['setup_score']}/100 | AI: {best['ai_score']}/10\n"
-            f"PF: <b>{best['pf']:.2f}</b> | WR: {best['wr']:.1%} | Regime: {best['regime']}\n"
-            f"RSI:{best['rsi']:.1f} | BB:{best['bb_pos']:.2f} | Vol:{best['vol_rel']:.2f}x | FZ:{best['funding_z']:+.2f}\n"
-            f"💬 {best['ai_reason']}\n"
-            f"SL: {best['sl']} | TP: {best['tp']}"
-        )
+        # ── Notifica Telegram spostata in open_trade() dopo il fill reale ──
+        # Qui salviamo i dati del segnale nel dizionario per recuperarli dopo il fill
+        signal_data["_tg_meta"] = {
+            "direction":   best["direction"],
+            "signal_type": best["signal_type"],
+            "mode":        best["mode"],
+            "scalp_mode":  best["scalp_mode"],
+            "rank_score":  best["rank_score"],
+            "setup_score": best["setup_score"],
+            "ai_score":    best["ai_score"],
+            "ai_reason":   best["ai_reason"],
+            "pf":          best["pf"],
+            "wr":          best["wr"],
+            "regime":      best["regime"],
+            "rsi":         best["rsi"],
+            "bb_pos":      best["bb_pos"],
+            "vol_rel":     best["vol_rel"],
+            "funding_z":   best["funding_z"],
+        }
+        publish_signal(coin_best, signal_data)
         sent = 1
     else:
         log_alt("Nessun segnale valido questo ciclo")
@@ -5864,12 +5875,32 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
 
         delete_signal(coin)
         log_exec(f"✅ [{coin}] APERTO [{direction}] @ {filled_entry} SL:{sl_px} TP:{tp_px}")
+
+        # ── Notifica Telegram post-fill con tutti i dati del segnale ──
+        meta = signal.get("_tg_meta", {})
+        sig_type  = meta.get("signal_type", signal.get("signal_type", "?"))
+        mode_str  = meta.get("scalp_mode",  signal.get("scalp_mode", "?"))
+        rank      = meta.get("rank_score",  signal.get("rank_score", 0))
+        score     = meta.get("setup_score", signal.get("setup_score", 0))
+        ai_sc     = meta.get("ai_score",    signal.get("ai_score", 0))
+        ai_rsn    = meta.get("ai_reason",   signal.get("ai_reason", ""))
+        pf        = meta.get("pf",          signal.get("profit_factor", 0))
+        wr        = meta.get("wr",          signal.get("win_rate", 0))
+        regime_s  = meta.get("regime",      signal.get("regime", "?"))
+        rsi_s     = meta.get("rsi",         signal.get("rsi", 0))
+        bb_s      = meta.get("bb_pos",      signal.get("bb_pos", 0))
+        vol_s     = meta.get("vol_rel",     signal.get("vol_rel", 0))
+        fz_s      = meta.get("funding_z",   signal.get("funding_z", 0))
+        sl_pct    = abs(filled_entry - sl_px) / filled_entry * 100 if filled_entry > 0 else 0
+        tp_pct    = abs(tp_px - filled_entry) / filled_entry * 100 if filled_entry > 0 else 0
         tg(
-            f"{'🟢' if is_buy else '🔴'} <b>FILL {direction}</b> {coin}\n"
-            f"Entry: <b>{filled_entry}</b>\n"
-            f"SL: {sl_px} {'✅' if sl_ok else '❌'} | TP: {tp_px} {'✅' if tp_ok else '❌'}\n"
-            f"Size: ${TRADE_SIZE_USD} ({actual_size} contracts) | "
-            f"Margine: ~${TRADE_SIZE_USD/LEVERAGE:.2f}"
+            f"{'🟢' if is_buy else '🔴'} <b>{coin} {direction} APERTO</b> [{sig_type}] [{mode_str}] 🏆\n"
+            f"Entry: <b>{filled_entry}</b> | Size: {actual_size}\n"
+            f"SL: {sl_px} ({sl_pct:.2f}%) {'✅' if sl_ok else '❌'} | TP: {tp_px} ({tp_pct:.2f}%) {'✅' if tp_ok else '❌'}\n"
+            f"Rank: <b>{rank:.3f}</b> | Score: {score}/100 | AI: {ai_sc}/10\n"
+            f"PF: <b>{pf:.2f}</b> | WR: {wr:.1%} | Regime: {regime_s}\n"
+            f"RSI:{rsi_s:.1f} | BB:{bb_s:.2f} | Vol:{vol_s:.2f}x | FZ:{fz_s:+.2f}\n"
+            f"💬 {ai_rsn}"
         )
         return "filled"
 
