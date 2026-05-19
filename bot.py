@@ -5374,7 +5374,15 @@ def get_account_balance() -> float:
         try:
             state = call(_info.user_state, account.address, label='balance', timeout=15)
             av = float(state.get("marginSummary", {}).get("accountValue", 0) or 0)
-            return av if av > 0 else float(state.get("withdrawable", 0) or 0)
+            if av == 0:
+                raw = state.get("withdrawable", 0)
+                try:
+                    av = float(str(raw).replace(",", ".")) if raw else 0.0
+                except (ValueError, TypeError):
+                    av = 0.0
+            if av == 0:
+                log_err(f"get_account_balance: v=0 | withdrawable={repr(state.get('withdrawable'))} | ms={state.get('marginSummary')}")
+            return av
         except Exception as e:
             if "429" in str(e) and attempt < 2:
                 time.sleep(3 * (attempt + 1))
