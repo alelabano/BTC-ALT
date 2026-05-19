@@ -2554,11 +2554,17 @@ def get_balance():
         return _bal_cache["value"]
     try:
         s = call(_info.user_state, _account.address, timeout=10)
-        v = float(s["marginSummary"]["accountValue"] or 0) or float(s.get("withdrawable", 0) or 0)
+        v = float(s.get("marginSummary", {}).get("accountValue", 0) or 0)
+        if v == 0:
+            v = float(s.get("withdrawable", 0) or 0)
         if v > 0:
             _bal_cache = {"ts": time.time(), "value": v}
+        else:
+            log_btc(f"get_balance: v=0 keys={list(s.keys())} withdrawable={s.get('withdrawable')}")
         return v
-    except: return _bal_cache.get("value", 0)
+    except Exception as e:
+        log_btc(f"get_balance error: {e}")
+        return _bal_cache.get("value", 0)
 
 def get_mid():
     global _mid_cache
