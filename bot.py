@@ -2553,30 +2553,24 @@ def _extract_account_value(state: dict) -> float:
     Estrae accountValue compatibile con account isolato e unificato (cross-margin).
     Hyperliquid unificato usa crossMarginSummary invece di marginSummary.
     """
-    cms = state.get("crossMarginSummary", {})
-    # Account unificato: usa portfolioValue (= "Portfolio Value" nell'app)
-    for field in ("portfolioValue", "accountValue"):
-        v = float(cms.get(field, 0) or 0)
+    # Priorità: crossMarginSummary.accountValue → marginSummary.accountValue → withdrawable (root)
+    for src in (state.get("crossMarginSummary", {}), state.get("marginSummary", {})):
+        v = float(src.get("accountValue", 0) or 0)
         if v > 0:
             return v
-    ms = state.get("marginSummary", {})
-    return float(ms.get("accountValue", 0) or 0)
+    # Account unificato Hyperliquid: il saldo disponibile è nel campo root "withdrawable"
+    return float(state.get("withdrawable", 0) or 0)
 
 def _extract_margin_summary(state: dict) -> tuple:
     """Ritorna (account_value, total_margin_used) per account unificato e isolato."""
-    cms = state.get("crossMarginSummary", {})
-    av = 0.0
-    for field in ("portfolioValue", "accountValue"):
-        av = float(cms.get(field, 0) or 0)
+    for src in (state.get("crossMarginSummary", {}), state.get("marginSummary", {})):
+        av = float(src.get("accountValue", 0) or 0)
         if av > 0:
-            break
-    mu = float(cms.get("totalMarginUsed", 0) or 0)
-    if av > 0:
-        return av, mu
-    ms = state.get("marginSummary", {})
-    av = float(ms.get("accountValue", 0) or 0)
-    mu = float(ms.get("totalMarginUsed", 0) or 0)
-    return av, mu
+            mu = float(src.get("totalMarginUsed", 0) or 0)
+            return av, mu
+    # Fallback withdrawable
+    av = float(state.get("withdrawable", 0) or 0)
+    return av, 0.0
 
 def get_balance():
     global _bal_cache
