@@ -2554,16 +2554,22 @@ def _extract_account_value(state: dict) -> float:
     Hyperliquid unificato usa crossMarginSummary invece di marginSummary.
     """
     cms = state.get("crossMarginSummary", {})
-    v = float(cms.get("accountValue", 0) or 0)
-    if v > 0:
-        return v
+    # Account unificato: usa portfolioValue (= "Portfolio Value" nell'app)
+    for field in ("portfolioValue", "accountValue"):
+        v = float(cms.get(field, 0) or 0)
+        if v > 0:
+            return v
     ms = state.get("marginSummary", {})
     return float(ms.get("accountValue", 0) or 0)
 
 def _extract_margin_summary(state: dict) -> tuple:
     """Ritorna (account_value, total_margin_used) per account unificato e isolato."""
     cms = state.get("crossMarginSummary", {})
-    av = float(cms.get("accountValue", 0) or 0)
+    av = 0.0
+    for field in ("portfolioValue", "accountValue"):
+        av = float(cms.get(field, 0) or 0)
+        if av > 0:
+            break
     mu = float(cms.get("totalMarginUsed", 0) or 0)
     if av > 0:
         return av, mu
@@ -5394,7 +5400,14 @@ def get_account_balance() -> float:
     for attempt in range(3):
         try:
             state = call(_info.user_state, account.address, label='balance', timeout=15)
-            return _extract_account_value(state)
+            v = _extract_account_value(state)
+            if v == 0:
+                # Debug: stampa le chiavi reali della risposta per diagnosticare
+                keys = list(state.keys()) if isinstance(state, dict) else str(type(state))
+                cms = state.get("crossMarginSummary", {}) if isinstance(state, dict) else {}
+                ms  = state.get("marginSummary", {}) if isinstance(state, dict) else {}
+                log_err(f"get_account_balance: value=0 | keys={keys} | CMS={cms} | MS={ms}")
+            return v
         except Exception as e:
             if "429" in str(e) and attempt < 2:
                 time.sleep(3 * (attempt + 1))
