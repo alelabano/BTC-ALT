@@ -2555,7 +2555,8 @@ def get_balance():
     try:
         s = call(_info.user_state, _account.address, timeout=10)
         v = float(s["marginSummary"]["accountValue"] or 0) or float(s.get("withdrawable", 0) or 0)
-        _bal_cache = {"ts": time.time(), "value": v}
+        if v > 0:
+            _bal_cache = {"ts": time.time(), "value": v}
         return v
     except: return _bal_cache.get("value", 0)
 
