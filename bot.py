@@ -2596,6 +2596,8 @@ def check_margin(size, entry_px):
         s = call(_info.user_state, _account.address, timeout=10)
         margin_summary = s.get("marginSummary", {})
         account_value = float(margin_summary.get("accountValue", 0) or 0)
+        if account_value == 0:
+            account_value = float(s.get("withdrawable", 0) or 0)
         total_margin  = float(margin_summary.get("totalMarginUsed", 0) or 0)
         available = account_value - total_margin
 
