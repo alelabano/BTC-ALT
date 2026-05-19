@@ -2548,13 +2548,37 @@ def get_position():
         _pos_cache = {"ts": time.time(), "value": None}
     except: pass
     return _pos_cache.get("value")
+def _extract_account_value(state: dict) -> float:
+    """
+    Estrae accountValue compatibile con account isolato e unificato (cross-margin).
+    Hyperliquid unificato usa crossMarginSummary invece di marginSummary.
+    """
+    cms = state.get("crossMarginSummary", {})
+    v = float(cms.get("accountValue", 0) or 0)
+    if v > 0:
+        return v
+    ms = state.get("marginSummary", {})
+    return float(ms.get("accountValue", 0) or 0)
+
+def _extract_margin_summary(state: dict) -> tuple:
+    """Ritorna (account_value, total_margin_used) per account unificato e isolato."""
+    cms = state.get("crossMarginSummary", {})
+    av = float(cms.get("accountValue", 0) or 0)
+    mu = float(cms.get("totalMarginUsed", 0) or 0)
+    if av > 0:
+        return av, mu
+    ms = state.get("marginSummary", {})
+    av = float(ms.get("accountValue", 0) or 0)
+    mu = float(ms.get("totalMarginUsed", 0) or 0)
+    return av, mu
+
 def get_balance():
     global _bal_cache
     if time.time() - _bal_cache["ts"] < API_CACHE_TTL:
         return _bal_cache["value"]
     try:
         s = call(_info.user_state, _account.address, timeout=10)
-        v = float(s["marginSummary"]["accountValue"])
+        v = _extract_account_value(s)
         _bal_cache = {"ts": time.time(), "value": v}
         return v
     except: return _bal_cache.get("value", 0)
@@ -2594,9 +2618,7 @@ def check_margin(size, entry_px):
     """
     try:
         s = call(_info.user_state, _account.address, timeout=10)
-        margin_summary = s.get("marginSummary", {})
-        account_value = float(margin_summary.get("accountValue", 0) or 0)
-        total_margin  = float(margin_summary.get("totalMarginUsed", 0) or 0)
+        account_value, total_margin = _extract_margin_summary(s)
         available = account_value - total_margin
 
         # Margine richiesto per questo trade
@@ -3830,9 +3852,7 @@ def check_margin_ok(coin, size, entry_px):
     """Verifica margine sufficiente prima di inviare ordine."""
     try:
         state = call(_info.user_state, account.address, label='margin_check', timeout=10)
-        ms = state.get("marginSummary", {})
-        account_val = float(ms.get("accountValue", 0) or 0)
-        margin_used = float(ms.get("totalMarginUsed", 0) or 0)
+        account_val, margin_used = _extract_margin_summary(state)
         available = account_val - margin_used
         required = (size * entry_px) / LEVERAGE * 1.2  # +20% buffer
         if available < required:
@@ -5374,7 +5394,7 @@ def get_account_balance() -> float:
     for attempt in range(3):
         try:
             state = call(_info.user_state, account.address, label='balance', timeout=15)
-            return float(state.get("marginSummary", {}).get("accountValue", 0) or 0)
+            return _extract_account_value(state)
         except Exception as e:
             if "429" in str(e) and attempt < 2:
                 time.sleep(3 * (attempt + 1))
