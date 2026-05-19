@@ -2554,10 +2554,17 @@ def get_balance():
         return _bal_cache["value"]
     try:
         s = call(_info.user_state, _account.address, timeout=10)
-        v = float(s["marginSummary"]["accountValue"])
-        _bal_cache = {"ts": time.time(), "value": v}
+        v = float(s.get("marginSummary", {}).get("accountValue", 0) or 0)
+        if v == 0:
+            v = float(s.get("withdrawable", 0) or 0)
+        if v > 0:
+            _bal_cache = {"ts": time.time(), "value": v}
+        else:
+            log_btc(f"get_balance: v=0 keys={list(s.keys())} withdrawable={s.get('withdrawable')}")
         return v
-    except: return _bal_cache.get("value", 0)
+    except Exception as e:
+        log_btc(f"get_balance error: {e}")
+        return _bal_cache.get("value", 0)
 
 def get_mid():
     global _mid_cache
@@ -2596,6 +2603,8 @@ def check_margin(size, entry_px):
         s = call(_info.user_state, _account.address, timeout=10)
         margin_summary = s.get("marginSummary", {})
         account_value = float(margin_summary.get("accountValue", 0) or 0)
+        if account_value == 0:
+            account_value = float(s.get("withdrawable", 0) or 0)
         total_margin  = float(margin_summary.get("totalMarginUsed", 0) or 0)
         available = account_value - total_margin
 
@@ -2810,17 +2819,8 @@ def recover_position(sz_dec, px_dec):
         else:
             sl_px = rpx(entry + emergency_dist, px_dec)
 
-        try:
-            size_abs = rpx(abs(szi), sz_dec)
-            is_buy = d == "LONG"
-            call(_exchange.order, BTC_COIN, not is_buy, size_abs, sl_px,
-                 {"trigger": {"triggerPx": sl_px, "isMarket": True, "tpsl": "sl"}},
-                 True, timeout=15)
-            log_btc(f"🚨 EMERGENCY SL placed @ {sl_px} (20% catastrofico)")
-            tg(f"🚨 <b>BTC</b> restart — emergency SL @ {sl_px} (20%)")
-        except Exception as e:
-            log_btc(f"🚨 EMERGENCY SL FAILED: {e}")
-            tg(f"🚨🚨 BTC NO SL — MANUAL CHECK!")
+        # [NO_SL] Emergency SL disabilitato
+        log_btc("ℹ️ Posizione aperta senza SL (NO_SL mode)")
     else:
         log_btc(f"✅ SL già presente — nessuna azione")
 
@@ -3063,12 +3063,7 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
         _btc_tp_oid = None
         try:
             # SL sull'exchange (safety net)
-            sl_res = call(_exchange.order, BTC_COIN, not is_long, size_real, sl_px,
-                         {"trigger": {"triggerPx": sl_px, "isMarket": True, "tpsl": "sl"}},
-                         True, timeout=15)
-            if sl_res and sl_res.get("status") == "ok":
-                for s in sl_res.get("response", {}).get("data", {}).get("statuses", []):
-                    if "resting" in s: _btc_sl_oid = s["resting"]["oid"]
+        # [NO_SL] SL disabilitato
             time.sleep(0.2)
             # TP sull'exchange (prende profitto automatico)
             tp_res = call(_exchange.order, BTC_COIN, not is_long, size_real, tp_px,
@@ -3907,9 +3902,7 @@ def update_mechanical_trailing(coin, pos, mid, atr, direction, open_trade_meta,
                     cancel_order(coin, o["oid"])
         time.sleep(0.3)
         size_abs = round_to_decimals(abs(szi), sz_dec.get(coin, 2))
-        call(_exchange.order, str(coin), not is_long, size_abs, new_ts,
-             {"trigger": {"triggerPx": new_ts, "isMarket": True, "tpsl": "sl"}},
-             True, timeout=15, label=f'trail_{coin}')
+        # [NO_SL] trailing stop order disabilitato
         meta["current_ts"] = new_ts
         meta["trailing_active"] = True
         trail_pct = abs(new_ts - entry) / entry * 100
@@ -5242,15 +5235,16 @@ def run_processor():
         log_alt(f"🏆 BEST SIGNAL: {coin_best} [{best['direction']}] [{best['signal_type']}] [{best['mode']}] "
               f"rank:{best['rank_score']:.3f} PF:{best['pf']:.2f} AI:{best['ai_score']}/10 "
               f"SL:{best['sl']} TP:{best['tp']}")
-        tg(
-            f"{'🟢' if best['direction']=='LONG' else '🔴'} <b>{coin_best}</b> "
-            f"[{best['direction']}] [{best['signal_type']}] [{best['mode']}] 🏆\n"
-            f"Rank: <b>{best['rank_score']:.3f}</b> | Score: {best['setup_score']}/100 | AI: {best['ai_score']}/10\n"
-            f"PF: <b>{best['pf']:.2f}</b> | WR: {best['wr']:.1%} | Regime: {best['regime']}\n"
-            f"RSI:{best['rsi']:.1f} | BB:{best['bb_pos']:.2f} | Vol:{best['vol_rel']:.2f}x | FZ:{best['funding_z']:+.2f}\n"
-            f"💬 {best['ai_reason']}\n"
-            f"SL: {best['sl']} | TP: {best['tp']}"
-        )
+        # Salva metadati per la notifica post-fill
+        signal_data["_tg_meta"] = {
+            "signal_type": best["signal_type"], "mode": best["mode"],
+            "scalp_mode":  best["scalp_mode"],  "rank_score": best["rank_score"],
+            "setup_score": best["setup_score"], "ai_score":   best["ai_score"],
+            "ai_reason":   best["ai_reason"],   "pf":         best["pf"],
+            "wr":          best["wr"],           "regime":     best["regime"],
+            "rsi":         best["rsi"],          "bb_pos":     best["bb_pos"],
+            "vol_rel":     best["vol_rel"],      "funding_z":  best["funding_z"],
+        }
         sent = 1
     else:
         log_alt("Nessun segnale valido questo ciclo")
@@ -5363,7 +5357,16 @@ def get_account_balance() -> float:
     for attempt in range(3):
         try:
             state = call(_info.user_state, account.address, label='balance', timeout=15)
-            return float(state.get("marginSummary", {}).get("accountValue", 0) or 0)
+            av = float(state.get("marginSummary", {}).get("accountValue", 0) or 0)
+            if av == 0:
+                raw = state.get("withdrawable", 0)
+                try:
+                    av = float(str(raw).replace(",", ".")) if raw else 0.0
+                except (ValueError, TypeError):
+                    av = 0.0
+            if av == 0:
+                log_err(f"get_account_balance: v=0 | withdrawable={repr(state.get('withdrawable'))} | ms={state.get('marginSummary')}")
+            return av
         except Exception as e:
             if "429" in str(e) and attempt < 2:
                 time.sleep(3 * (attempt + 1))
@@ -5504,14 +5507,12 @@ def process_pending_orders(active_positions: dict, sz_dec: dict, px_dec: dict) -
         actual_size = round_to_decimals(filled_size, sz_d)
         log_exec(f"[{coin}] Pendente eseguito → SL/TP size:{actual_size}")
         try:
-            call(_exchange.order, str(coin), not is_buy, actual_size, sl_px,
-                 {"trigger": {"triggerPx": sl_px, "isMarket": True, "tpsl": "sl"}},
-                 True, timeout=15, label=f'sl_pend_{coin}')
+            # [NO_SL] SL disabilitato
             time.sleep(0.3)
             call(_exchange.order, str(coin), not is_buy, actual_size, tp_px,
                  {"trigger": {"triggerPx": tp_px, "isMarket": True, "tpsl": "tp"}},
                  True, timeout=15, label=f'tp_pend_{coin}')
-            tg(f"🔒 <b>{coin}</b> [{direction}] protetto | SL:{sl_px} TP:{tp_px}", silent=True)
+            tg(f"🔒 <b>{coin}</b> [{direction}] protetto | TP:{tp_px}", silent=True)
             delete_signal(coin)
             filled_count += 1
         except Exception as e:
@@ -5832,20 +5833,14 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
 
         actual_size = round_to_decimals(filled_size, sz_dec)
 
-        sl_res = call(_exchange.order, str(coin), not is_buy, actual_size, sl_px,
-                      {"trigger": {"triggerPx": sl_px, "isMarket": True, "tpsl": "sl"}},
-                      True, timeout=15, label=f'sl_{coin}')
+        # [NO_SL] SL disabilitato
         time.sleep(0.3)
         tp_res = call(_exchange.order, str(coin), not is_buy, actual_size, tp_px,
                       {"trigger": {"triggerPx": tp_px, "isMarket": True, "tpsl": "tp"}},
                       True, timeout=15, label=f'tp_{coin}')
 
-        sl_ok = sl_res and sl_res.get("status") == "ok"
+        sl_ok = True  # [NO_SL]
         tp_ok = tp_res and tp_res.get("status") == "ok"
-
-        if not sl_ok:
-            log_err(f"[{coin}] ❌ SL NON INVIATO")
-            tg(f"🚨 <b>{coin}</b> SL NON INVIATO — chiudi manualmente!")
 
         if ts_raw > 0:
             ts_px = round_to_decimals(ts_raw, effective_px_dec)
@@ -5864,12 +5859,17 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
 
         delete_signal(coin)
         log_exec(f"✅ [{coin}] APERTO [{direction}] @ {filled_entry} SL:{sl_px} TP:{tp_px}")
+        m = signal.get("_tg_meta", {})
+        sl_pct = abs(filled_entry - sl_px) / filled_entry * 100 if filled_entry > 0 else 0
+        tp_pct = abs(tp_px - filled_entry) / filled_entry * 100 if filled_entry > 0 else 0
         tg(
-            f"{'🟢' if is_buy else '🔴'} <b>FILL {direction}</b> {coin}\n"
-            f"Entry: <b>{filled_entry}</b>\n"
-            f"SL: {sl_px} {'✅' if sl_ok else '❌'} | TP: {tp_px} {'✅' if tp_ok else '❌'}\n"
-            f"Size: ${TRADE_SIZE_USD} ({actual_size} contracts) | "
-            f"Margine: ~${TRADE_SIZE_USD/LEVERAGE:.2f}"
+            f"{'🟢' if is_buy else '🔴'} <b>{coin} {direction} APERTO</b> [{m.get('signal_type','?')}] [{m.get('scalp_mode','?')}] 🏆\n"
+            f"Entry: <b>{filled_entry}</b> | Size: {actual_size}\n"
+            f"SL: {sl_px} ({sl_pct:.2f}%) {'✅' if sl_ok else '❌'} | TP: {tp_px} ({tp_pct:.2f}%) {'✅' if tp_ok else '❌'}\n"
+            f"Rank: <b>{m.get('rank_score',0):.3f}</b> | Score: {m.get('setup_score',0)}/100 | AI: {m.get('ai_score',0)}/10\n"
+            f"PF: <b>{m.get('pf',0):.2f}</b> | WR: {m.get('wr',0):.1%} | Regime: {m.get('regime','?')}\n"
+            f"RSI:{m.get('rsi',0):.1f} | BB:{m.get('bb_pos',0):.2f} | Vol:{m.get('vol_rel',0):.2f}x | FZ:{m.get('funding_z',0):+.2f}\n"
+            f"💬 {m.get('ai_reason','')}"
         )
         return "filled"
 
