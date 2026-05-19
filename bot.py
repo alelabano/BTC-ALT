@@ -2548,37 +2548,13 @@ def get_position():
         _pos_cache = {"ts": time.time(), "value": None}
     except: pass
     return _pos_cache.get("value")
-def _extract_account_value(state: dict) -> float:
-    """
-    Estrae accountValue compatibile con account isolato e unificato (cross-margin).
-    Hyperliquid unificato usa crossMarginSummary invece di marginSummary.
-    """
-    # Priorità: crossMarginSummary.accountValue → marginSummary.accountValue → withdrawable (root)
-    for src in (state.get("crossMarginSummary", {}), state.get("marginSummary", {})):
-        v = float(src.get("accountValue", 0) or 0)
-        if v > 0:
-            return v
-    # Account unificato Hyperliquid: il saldo disponibile è nel campo root "withdrawable"
-    return float(state.get("withdrawable", 0) or 0)
-
-def _extract_margin_summary(state: dict) -> tuple:
-    """Ritorna (account_value, total_margin_used) per account unificato e isolato."""
-    for src in (state.get("crossMarginSummary", {}), state.get("marginSummary", {})):
-        av = float(src.get("accountValue", 0) or 0)
-        if av > 0:
-            mu = float(src.get("totalMarginUsed", 0) or 0)
-            return av, mu
-    # Fallback withdrawable
-    av = float(state.get("withdrawable", 0) or 0)
-    return av, 0.0
-
 def get_balance():
     global _bal_cache
     if time.time() - _bal_cache["ts"] < API_CACHE_TTL:
         return _bal_cache["value"]
     try:
         s = call(_info.user_state, _account.address, timeout=10)
-        v = _extract_account_value(s)
+        v = float(s["marginSummary"]["accountValue"] or 0) or float(s.get("withdrawable", 0) or 0)
         _bal_cache = {"ts": time.time(), "value": v}
         return v
     except: return _bal_cache.get("value", 0)
@@ -2618,7 +2594,9 @@ def check_margin(size, entry_px):
     """
     try:
         s = call(_info.user_state, _account.address, timeout=10)
-        account_value, total_margin = _extract_margin_summary(s)
+        margin_summary = s.get("marginSummary", {})
+        account_value = float(margin_summary.get("accountValue", 0) or 0)
+        total_margin  = float(margin_summary.get("totalMarginUsed", 0) or 0)
         available = account_value - total_margin
 
         # Margine richiesto per questo trade
@@ -3852,7 +3830,9 @@ def check_margin_ok(coin, size, entry_px):
     """Verifica margine sufficiente prima di inviare ordine."""
     try:
         state = call(_info.user_state, account.address, label='margin_check', timeout=10)
-        account_val, margin_used = _extract_margin_summary(state)
+        ms = state.get("marginSummary", {})
+        account_val = float(ms.get("accountValue", 0) or 0)
+        margin_used = float(ms.get("totalMarginUsed", 0) or 0)
         available = account_val - margin_used
         required = (size * entry_px) / LEVERAGE * 1.2  # +20% buffer
         if available < required:
@@ -5262,26 +5242,16 @@ def run_processor():
         log_alt(f"🏆 BEST SIGNAL: {coin_best} [{best['direction']}] [{best['signal_type']}] [{best['mode']}] "
               f"rank:{best['rank_score']:.3f} PF:{best['pf']:.2f} AI:{best['ai_score']}/10 "
               f"SL:{best['sl']} TP:{best['tp']}")
-        # ── Notifica Telegram spostata in open_trade() dopo il fill reale ──
-        # Qui salviamo i dati del segnale nel dizionario per recuperarli dopo il fill
+        # Salva metadati per la notifica post-fill
         signal_data["_tg_meta"] = {
-            "direction":   best["direction"],
-            "signal_type": best["signal_type"],
-            "mode":        best["mode"],
-            "scalp_mode":  best["scalp_mode"],
-            "rank_score":  best["rank_score"],
-            "setup_score": best["setup_score"],
-            "ai_score":    best["ai_score"],
-            "ai_reason":   best["ai_reason"],
-            "pf":          best["pf"],
-            "wr":          best["wr"],
-            "regime":      best["regime"],
-            "rsi":         best["rsi"],
-            "bb_pos":      best["bb_pos"],
-            "vol_rel":     best["vol_rel"],
-            "funding_z":   best["funding_z"],
+            "signal_type": best["signal_type"], "mode": best["mode"],
+            "scalp_mode":  best["scalp_mode"],  "rank_score": best["rank_score"],
+            "setup_score": best["setup_score"], "ai_score":   best["ai_score"],
+            "ai_reason":   best["ai_reason"],   "pf":         best["pf"],
+            "wr":          best["wr"],           "regime":     best["regime"],
+            "rsi":         best["rsi"],          "bb_pos":     best["bb_pos"],
+            "vol_rel":     best["vol_rel"],      "funding_z":  best["funding_z"],
         }
-        publish_signal(coin_best, signal_data)
         sent = 1
     else:
         log_alt("Nessun segnale valido questo ciclo")
@@ -5394,14 +5364,8 @@ def get_account_balance() -> float:
     for attempt in range(3):
         try:
             state = call(_info.user_state, account.address, label='balance', timeout=15)
-            v = _extract_account_value(state)
-            if v == 0:
-                # Debug: stampa le chiavi reali della risposta per diagnosticare
-                keys = list(state.keys()) if isinstance(state, dict) else str(type(state))
-                cms = state.get("crossMarginSummary", {}) if isinstance(state, dict) else {}
-                ms  = state.get("marginSummary", {}) if isinstance(state, dict) else {}
-                log_err(f"get_account_balance: value=0 | keys={keys} | CMS={cms} | MS={ms}")
-            return v
+            av = float(state.get("marginSummary", {}).get("accountValue", 0) or 0)
+            return av if av > 0 else float(state.get("withdrawable", 0) or 0)
         except Exception as e:
             if "429" in str(e) and attempt < 2:
                 time.sleep(3 * (attempt + 1))
@@ -5902,32 +5866,17 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
 
         delete_signal(coin)
         log_exec(f"✅ [{coin}] APERTO [{direction}] @ {filled_entry} SL:{sl_px} TP:{tp_px}")
-
-        # ── Notifica Telegram post-fill con tutti i dati del segnale ──
-        meta = signal.get("_tg_meta", {})
-        sig_type  = meta.get("signal_type", signal.get("signal_type", "?"))
-        mode_str  = meta.get("scalp_mode",  signal.get("scalp_mode", "?"))
-        rank      = meta.get("rank_score",  signal.get("rank_score", 0))
-        score     = meta.get("setup_score", signal.get("setup_score", 0))
-        ai_sc     = meta.get("ai_score",    signal.get("ai_score", 0))
-        ai_rsn    = meta.get("ai_reason",   signal.get("ai_reason", ""))
-        pf        = meta.get("pf",          signal.get("profit_factor", 0))
-        wr        = meta.get("wr",          signal.get("win_rate", 0))
-        regime_s  = meta.get("regime",      signal.get("regime", "?"))
-        rsi_s     = meta.get("rsi",         signal.get("rsi", 0))
-        bb_s      = meta.get("bb_pos",      signal.get("bb_pos", 0))
-        vol_s     = meta.get("vol_rel",     signal.get("vol_rel", 0))
-        fz_s      = meta.get("funding_z",   signal.get("funding_z", 0))
-        sl_pct    = abs(filled_entry - sl_px) / filled_entry * 100 if filled_entry > 0 else 0
-        tp_pct    = abs(tp_px - filled_entry) / filled_entry * 100 if filled_entry > 0 else 0
+        m = signal.get("_tg_meta", {})
+        sl_pct = abs(filled_entry - sl_px) / filled_entry * 100 if filled_entry > 0 else 0
+        tp_pct = abs(tp_px - filled_entry) / filled_entry * 100 if filled_entry > 0 else 0
         tg(
-            f"{'🟢' if is_buy else '🔴'} <b>{coin} {direction} APERTO</b> [{sig_type}] [{mode_str}] 🏆\n"
+            f"{'🟢' if is_buy else '🔴'} <b>{coin} {direction} APERTO</b> [{m.get('signal_type','?')}] [{m.get('scalp_mode','?')}] 🏆\n"
             f"Entry: <b>{filled_entry}</b> | Size: {actual_size}\n"
             f"SL: {sl_px} ({sl_pct:.2f}%) {'✅' if sl_ok else '❌'} | TP: {tp_px} ({tp_pct:.2f}%) {'✅' if tp_ok else '❌'}\n"
-            f"Rank: <b>{rank:.3f}</b> | Score: {score}/100 | AI: {ai_sc}/10\n"
-            f"PF: <b>{pf:.2f}</b> | WR: {wr:.1%} | Regime: {regime_s}\n"
-            f"RSI:{rsi_s:.1f} | BB:{bb_s:.2f} | Vol:{vol_s:.2f}x | FZ:{fz_s:+.2f}\n"
-            f"💬 {ai_rsn}"
+            f"Rank: <b>{m.get('rank_score',0):.3f}</b> | Score: {m.get('setup_score',0)}/100 | AI: {m.get('ai_score',0)}/10\n"
+            f"PF: <b>{m.get('pf',0):.2f}</b> | WR: {m.get('wr',0):.1%} | Regime: {m.get('regime','?')}\n"
+            f"RSI:{m.get('rsi',0):.1f} | BB:{m.get('bb_pos',0):.2f} | Vol:{m.get('vol_rel',0):.2f}x | FZ:{m.get('funding_z',0):+.2f}\n"
+            f"💬 {m.get('ai_reason','')}"
         )
         return "filled"
 
