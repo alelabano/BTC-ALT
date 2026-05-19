@@ -26,7 +26,7 @@ Variabili d'ambiente:
   COINGECKO_API_KEY (opzionale)
 """
 
-import os, sys, time, json, hashlib, threading
+import os, sys, time, json, hashlib, threading, math
 import pandas as pd
 import numpy as np
 import requests
@@ -150,6 +150,8 @@ BTC_BASE_MARGIN = 1.0
 ALT_MARGIN_PCT = 0.005
 _optimal_leverage_cache = {"btc": {"lev": 10, "ts": 0, "reasoning": ""}, "alt": {}}
 LEV_CACHE_TTL = 600
+TARGET_PROFIT_USD = float(os.getenv("TARGET_PROFIT_USD", "0.08"))
+TARGET_PROFIT_FEE_PCT = float(os.getenv("TARGET_PROFIT_FEE_PCT", "0.001"))  # buffer fee/slippage 0.10%
 # ── Missing aliases (ALT engine compatibility) ───────────────────
 TRADE_SIZE_USD = ALT_TRADE_SIZE_USD
 LEVERAGE = ALT_LEVERAGE
@@ -1895,6 +1897,52 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
             f"| notional:${final_notional:.2f} | size:{size}")
 
     return size, margin_used, final_notional, sz_dec
+
+def tune_leverage_for_profit_target(coin: str, entry_px: float, tp_px: float,
+                                    margin_usd: float, current_leverage: int,
+                                    max_leverage: int, size_mult: float = 1.0) -> dict:
+    """Aumenta la leva solo se il TP scelto dagli indicatori non arriva al target USD."""
+    try:
+        if TARGET_PROFIT_USD <= 0 or entry_px <= 0 or tp_px <= 0:
+            return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": "target disabilitato"}
+
+        tp_pct = abs(tp_px - entry_px) / entry_px
+        if tp_pct <= 0:
+            return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": "TP nullo"}
+
+        net_tp_pct = tp_pct - TARGET_PROFIT_FEE_PCT
+        margin_eff = max(0.01, float(margin_usd) * max(0.01, float(size_mult)))
+        max_lev = max(1, int(max_leverage))
+        base_lev = max(1, min(int(current_leverage), max_lev))
+
+        if net_tp_pct <= 0:
+            required_lev = max_lev
+        else:
+            required_notional = TARGET_PROFIT_USD / net_tp_pct
+            required_lev = max(1, int(math.ceil(required_notional / margin_eff)))
+
+        chosen_lev = min(max(base_lev, required_lev), max_lev)
+        notional = max(MIN_NOTIONAL_USD, margin_eff * chosen_lev)
+        expected_profit = notional * max(net_tp_pct, 0.0)
+
+        if expected_profit + 1e-9 < TARGET_PROFIT_USD:
+            reason = (f"target netto ${TARGET_PROFIT_USD:.2f} non pieno: max {chosen_lev}x "
+                      f"=> ${expected_profit:.2f} stimati")
+        elif chosen_lev > base_lev:
+            reason = (f"target netto ${TARGET_PROFIT_USD:.2f}: leva {base_lev}x→{chosen_lev}x "
+                      f"su TP {tp_pct:.2%}")
+        else:
+            reason = f"target netto ${TARGET_PROFIT_USD:.2f} ok con {chosen_lev}x su TP {tp_pct:.2%}"
+
+        return {
+            "leverage": chosen_lev,
+            "expected_profit": expected_profit,
+            "tp_pct": tp_pct,
+            "required_leverage": required_lev,
+            "reason": reason,
+        }
+    except Exception as e:
+        return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": f"target fallback ({e})"}
 # ================================================================
 # BACKTEST — testa i segnali esatti del bot su storico 5m
 # ================================================================
@@ -2912,6 +2960,9 @@ def btc_check_partial_close(pos_state, mid, sz_dec, px_dec):
 
     entry = pos_state.get("entry_px", pos_state.get("entry", 0))
     pnl = (mid - entry) / entry if is_long else (entry - mid) / entry
+    profit_usd = abs(mid - entry) * close_size
+    if profit_usd < TARGET_PROFIT_USD:
+        return
 
     try:
         btc_market_close(pos_state.get("side", "LONG"), close_size, mid, sz_dec, px_dec)
@@ -2978,16 +3029,22 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
             log_btc(f"⚠️ Leva {selected_leverage}x > max {max_lev_allowed}x → ridotta")
             selected_leverage = max_lev_allowed
         
+        target_info = tune_leverage_for_profit_target(
+            BTC_COIN, entry_px, tp, BTC_MARGIN_USD, selected_leverage, max_lev_allowed, size_mult
+        )
+        selected_leverage = target_info["leverage"]
+        log_btc(f"🎯 Target profit: {target_info['reason']}")
+
         # ── IMPOSTA LEVA ──
         try:
             call(_exchange.update_leverage, selected_leverage, BTC_COIN, is_cross=False, timeout=10)
-            log_btc(f"✅ Leva impostata: {selected_leverage}x | {lev_analysis['reasoning']}")
+            log_btc(f"✅ Leva isolated impostata: {selected_leverage}x | {lev_analysis['reasoning']}")
         except Exception as e:
             log_btc(f"❌ Impostazione leva isolated fallita: {e} — trade annullato")
             return False
         
         # ── CALCOLA SIZE DINAMICA (già include size_mult) ──
-        size, margin_used, notional, _ = calculate_trade_size(entry_px, selected_leverage, coin="BTC", size_mult=size_mult)
+        size, margin_used, notional, _ = calculate_trade_size(entry_px, selected_leverage, margin_usd=BTC_MARGIN_USD, coin="BTC", size_mult=size_mult)
         
         
         if size <= 0:
@@ -5659,9 +5716,15 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         log_err(f"[{coin}] SHORT SL/TP incoerenti (e:{entry_px} sl:{sl_px} tp:{tp_px})")
         return False
 
+    target_info = tune_leverage_for_profit_target(
+        coin, entry_px, tp_px, TRADE_SIZE_USD, selected_leverage, 20, size_mult
+    )
+    selected_leverage = target_info["leverage"]
+    log_exec(f"[{coin}] 🎯 Target profit: {target_info['reason']}")
+
     # Size calcolata sul nozionale — margine × leva effettiva, floor MIN_NOTIONAL_USD ($10)
-    # notional = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD × LEVERAGE)
-    notional_target = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * size_mult * LEVERAGE)
+    # notional = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD × leva selezionata)
+    notional_target = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * size_mult * selected_leverage)
     size_nominal = round_to_decimals(notional_target / entry_px, sz_dec)
     if size_nominal <= 0:
         return False
@@ -5669,7 +5732,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     if size_nominal * entry_px < MIN_NOTIONAL_USD:
         log_err(f"[{coin}] Notional insufficiente ({size_nominal} × {entry_px:.4f} = {size_nominal * entry_px:.2f} < {MIN_NOTIONAL_USD})")
         return False
-    log_exec(f"[{coin}] 💰 SIZE: margin=${TRADE_SIZE_USD:.2f} × leva={LEVERAGE}x → notional=${notional_target:.2f} → {size_nominal}")
+    log_exec(f"[{coin}] 💰 SIZE: margin=${TRADE_SIZE_USD * size_mult:.2f} × leva={selected_leverage}x → notional=${notional_target:.2f} → {size_nominal} | TP≈${target_info['expected_profit']:.2f}")
 
     log_exec(f"[{coin}] {direction} entry:{entry_px} sl:{sl_px} tp:{tp_px} size:{size_nominal}")
 
@@ -5677,7 +5740,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         # ── Imposta leva e verifica quella effettiva ──────────────
         for attempt in range(3):
             try:
-                call(_exchange.update_leverage, int(LEVERAGE), str(coin), is_cross=False,
+                call(_exchange.update_leverage, int(selected_leverage), str(coin), is_cross=False,
                      timeout=10, label=f'lev_{coin}')
                 break
             except Exception as e:
@@ -5689,9 +5752,9 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
 
         # Verifica leva effettiva: Hyperliquid può applicare un max inferiore
         actual_lev = get_effective_leverage(coin)
-        if actual_lev != LEVERAGE:
-            lev_scale = LEVERAGE / max(actual_lev, 1)
-            log_exec(f"[{coin}] ⚠️ Leva effettiva {actual_lev}x (richiesta {LEVERAGE}x)")
+        if actual_lev != selected_leverage:
+            lev_scale = selected_leverage / max(actual_lev, 1)
+            log_exec(f"[{coin}] ⚠️ Leva effettiva {actual_lev}x (richiesta {selected_leverage}x)")
 
             # SL scala con leva piena (protezione dal noise)
             sl_dist_old = abs(entry_px - sl_px)
@@ -5720,12 +5783,12 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
                 ts_raw = entry_px - ts_dist_old * lev_scale if is_buy else entry_px + ts_dist_old * lev_scale
 
             # Ricalcola size con leva effettiva (mantiene floor MIN_NOTIONAL_USD)
-            notional_actual = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * actual_lev)
+            notional_actual = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * size_mult * actual_lev)
             size_nominal = round_to_decimals(notional_actual / entry_px, sz_dec)
             if size_nominal <= 0 or size_nominal * entry_px < MIN_NOTIONAL_USD:
                 log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: notional=${size_nominal * entry_px:.2f}")
                 return False
-            log_exec(f"[{coin}] 💰 Ricalcolo: margin=${TRADE_SIZE_USD:.2f} × leva={actual_lev}x → notional=${notional_actual:.2f} → {size_nominal}")
+            log_exec(f"[{coin}] 💰 Ricalcolo: margin=${TRADE_SIZE_USD * size_mult:.2f} × leva={actual_lev}x → notional=${notional_actual:.2f} → {size_nominal}")
 
             sl_pct = abs(entry_px - sl_px) / entry_px * 100
             tp_pct = abs(tp_px - entry_px) / entry_px * 100
@@ -6772,25 +6835,26 @@ def executor_thread_alt():
                         pnl_ratio = (mid_px - entry_px) / entry_px if direction == "LONG" else (entry_px - mid_px) / entry_px
                         meta = open_trade_meta.get(coin, {})
                         trade_age = now - meta.get("ts_open", now)
+                        profit_usd_live = max(0.0, (mid_px - entry_px if direction == "LONG" else entry_px - mid_px) * abs(szi))
 
                         # ── 1. EARLY CUT disabilitato in modalità NO_SL ──
                         # Non chiude automaticamente in perdita: l'uscita resta manuale/TP/smart TP.
 
                         # ── 2. SMART TP: in profitto >0.2% → prendi profitto ──
-                        if pnl_ratio > 0.002 and trade_age > 60:
+                        if pnl_ratio > 0.002 and trade_age > 60 and profit_usd_live >= TARGET_PROFIT_USD:
                             # Check se momentum sta girando contro
                             try:
                                 sig = get_all_signals().get(coin, {})
                                 atr_approx = abs(float(sig.get("sl", entry_px)) - entry_px) / 1.2 if sig else mid_px * 0.01
                                 if pnl_ratio > 0.004 or (atr_approx > 0 and (mid_px - entry_px if direction == "LONG" else entry_px - mid_px) >= atr_approx * 1.0):
-                                    log_exec(f"[{coin}] 💰 SMART TP +{pnl_ratio:.2%}")
+                                    log_exec(f"[{coin}] 💰 SMART TP +{pnl_ratio:.2%} (${profit_usd_live:.2f})")
                                     actual_size = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
                                     close_px = round_to_decimals(mid_px * (0.995 if direction == "LONG" else 1.005), px_decimals.get(coin, 4))
                                     call(_exchange.order, str(coin), direction != "LONG",
                                          actual_size, close_px,
                                          {"limit": {"tif": "Ioc"}}, False, timeout=10)
                                     delete_signal(coin)
-                                    tg(f"💰 <b>{coin}</b> TP +{pnl_ratio:.2%}", silent=True)
+                                    tg(f"💰 <b>{coin}</b> TP +{pnl_ratio:.2%} (${profit_usd_live:.2f})", silent=True)
                             except Exception as e:
                                 log_err(f"[{coin}] smart tp: {e}")
                             continue
@@ -7214,12 +7278,13 @@ def btc_executor_loop(sz_dec, px_dec):
 
                 # ── 4. TRAILING: dinamico in base al peak ──
                 trail_dist = 0.001 if peak < 0.003 else 0.0015  # 0.10% o 0.15%
-                if peak > 0.0015 and pnl_ratio < peak - trail_dist:
-                    log_btc(f"🔒 TRAILING EXIT +{pnl_pct:.2f}% (peak:+{peak*100:.2f}%)")
+                profit_usd_live = max(0.0, (mid - entry if d == "LONG" else entry - mid) * abs(szi))
+                if peak > 0.0015 and pnl_ratio < peak - trail_dist and profit_usd_live >= TARGET_PROFIT_USD:
+                    log_btc(f"🔒 TRAILING EXIT +{pnl_pct:.2f}% (${profit_usd_live:.2f}, peak:+{peak*100:.2f}%)")
                     btc_market_close(d, abs(szi), mid, sz_dec, px_dec)
                     last_pos_state["close_reason"] = f"🔒 Trail {pnl_pct:+.2f}%"
                     save_pos_state(last_pos_state)
-                    tg(f"🔒 <b>BTC TRAIL</b> +{pnl_pct:.2f}%")
+                    tg(f"🔒 <b>BTC TRAIL</b> +{pnl_pct:.2f}% (${profit_usd_live:.2f})")
                     time.sleep(BTC_SCAN_INTERVAL)
                     continue
 
