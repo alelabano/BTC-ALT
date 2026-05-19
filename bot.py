@@ -5851,9 +5851,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
                         if o.get("orderType") == "Stop Market":
                             cancel_order(coin, o["oid"])
                             time.sleep(0.2)
-                    call(_exchange.order, str(coin), not is_buy, actual_size, ts_px,
-                         {"trigger": {"triggerPx": ts_px, "isMarket": True, "tpsl": "sl"}},
-                         True, timeout=10, label=f'trail_{coin}')
+                    pass  # [NO_SL] trailing stop disabilitato
                 except Exception as e:
                     log_err(f"[{coin}] trailing: {e}")
 
@@ -6839,12 +6837,7 @@ def executor_thread_alt():
                                         try: cancel_order(coin, sl_oid)
                                         except: pass
                                     size_abs = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
-                                    call(_exchange.order, str(coin), direction != "LONG",
-                                         size_abs, sl_lock_px,
-                                         {"trigger": {"triggerPx": sl_lock_px, "isMarket": True, "tpsl": "sl"}},
-                                         True, timeout=15, label=f"lock_{coin}")
-                                    log_exec(f"[{coin}] 🔒 PROFIT LOCK: peak={peak:.1%} → SL garantito {sl_lock_px} (+{lock_floor:.1%} entry)")
-                                    tg(f"🔒 <b>{coin}</b> LOCK: peak +{peak:.1%} → SL protetto {lock_floor:.1%}", silent=True)
+                                    pass  # [NO_SL] profit lock disabilitato
                                 except Exception as e:
                                     log_err(f"[{coin}] profit lock SL: {e}")
 
@@ -7222,12 +7215,7 @@ def btc_executor_loop(sz_dec, px_dec):
                             time.sleep(0.3)
                             be_px = rpx(entry_be, px_dec)
                             size_abs = rpx(abs(szi), sz_dec)
-                            call(_exchange.order, BTC_COIN, d != "LONG", size_abs, be_px,
-                                 {"trigger": {"triggerPx": be_px, "isMarket": True, "tpsl": "sl"}},
-                                 True, timeout=15)
-                            last_pos_state["be_active"] = True
-                            save_pos_state(last_pos_state)
-                            log_btc(f"⚖️ BREAK EVEN @ {be_px:,.0f}")
+                            pass  # [NO_SL] break-even disabilitato
                         except Exception as e:
                             log_btc(f"⚠️ BE failed: {e}")
 
