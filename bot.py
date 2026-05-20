@@ -152,6 +152,181 @@ _optimal_leverage_cache = {"btc": {"lev": 10, "ts": 0, "reasoning": ""}, "alt": 
 LEV_CACHE_TTL = 600
 TARGET_PROFIT_USD = float(os.getenv("TARGET_PROFIT_USD", "0.08"))
 TARGET_PROFIT_FEE_PCT = float(os.getenv("TARGET_PROFIT_FEE_PCT", "0.001"))  # buffer fee/slippage 0.10%
+
+# ── Parametri operativi centralizzati ────────────────────────────
+# Modifica qui: il codice sotto deve leggere queste soglie, non numeri sparsi.
+LEVERAGE_MIN = 1
+ALT_MAX_LEVERAGE = 20
+SIZE_MULT_MIN = 0.01
+PRICE_ROUND_MAX_DECIMALS = 10
+PRICE_ROUND_FALLBACK_DECIMALS = 6
+PRICE_ROUND_EXTRA_DECIMALS = 2
+PRICE_ROUND_MAX_EFFECTIVE_DECIMALS = 8
+PRICE_ROUND_REL_TOL = 0.005
+FINAL_NOTIONAL_TOLERANCE_USD = 0.01
+BALANCE_USAGE_MAX_PCT = 0.90
+
+BTC_ENTRY_LONG_MULT = 1.0003
+BTC_ENTRY_SHORT_MULT = 0.9997
+BTC_ENTRY_FILL_POLL_ATTEMPTS = 4
+BTC_ENTRY_FILL_POLL_INTERVAL = 0.5
+BTC_POST_FILL_RETRY_DELAY = 0.5
+BTC_TP_ATR_MULT = 1.8
+BTC_PARTIAL_CLOSE_PCT = 0.5
+BTC_TRAIL_LOW_PEAK_THRESHOLD = 0.003
+BTC_TRAIL_DIST_LOW = 0.001
+BTC_TRAIL_DIST_HIGH = 0.0015
+BTC_TRAIL_EXIT_MIN_PEAK = 0.0015
+BTC_BREAK_EVEN_TRIGGER_PCT = 0.0015
+BTC_RECOVERY_EMERGENCY_SL_PCT = 0.20
+BTC_SIGNAL_SL_FLOOR_PCT = 0.004
+BTC_SIGNAL_SL_ATR_MULT = 1.2
+BTC_SIGNAL_TP1_MIN_PCT = 0.003
+BTC_RECOVERY_TP1_ATR_MULT = 1.2
+BTC_SIGNAL_SL_CAP_PCT = 0.015
+BTC_SIGNAL_TP1_FLOOR_PCT = 0.005
+BTC_SIGNAL_TP1_SL_MULT = 1.2
+BTC_SIGNAL_TP2_FLOOR_PCT = 0.008
+BTC_SIGNAL_TP2_SL_MULT = 2.0
+BTC_SIGNAL_TP2_MIN_PCT = 0.005
+BTC_RECOVERED_SL_DIST_PCT = 0.012
+BTC_SL_ATR_REVERSE_MULT = 1.2
+
+ALT_DRIFT_ENTRY_LATE_PCT = 0.008
+ALT_DRIFT_INVALIDATE_PCT = 0.015
+ALT_DRIFT_REPRICE_PCT = 0.002
+ALT_DEFAULT_RR = 1.1
+ALT_TP_CAP_SCALPING_PCT = 0.015
+ALT_TP_CAP_SWING_PCT = 0.05
+ALT_POST_LEVERAGE_SLEEP = 1.0
+ALT_GTC_FILL_POLL_INTERVAL = 0.5
+ALT_PROTECTION_ORDER_DELAY = 0.3
+ALT_TRAILING_CANCEL_DELAY = 0.2
+ALT_SMART_TP_MIN_PNL_PCT = 0.002
+ALT_SMART_TP_STRONG_PNL_PCT = 0.004
+ALT_SMART_TP_MIN_AGE_SEC = 60
+ALT_SMART_TP_ATR_MULT = 1.0
+ALT_SMART_TP_ATR_SOURCE_MULT = 1.2
+ALT_SMART_TP_DEFAULT_ATR_PCT = 0.01
+ALT_CLOSE_LONG_MULT = 0.995
+ALT_CLOSE_SHORT_MULT = 1.005
+
+LEV_DEFAULT = 10
+LEV_LIQUIDITY_DEFAULT_SCORE = 0.7
+LEV_LIQUIDITY_FALLBACK_SCORE = 0.5
+LEV_LOOKBACK_DAYS = 7
+LEV_MIN_CANDLES = 50
+LEV_ATR_HIGH_PCT = 0.015
+LEV_ATR_MEDIUM_PCT = 0.008
+LEV_ADX_STRONG = 35
+LEV_ADX_MODERATE = 25
+LEV_ADX_WEAK = 18
+LEV_SPREAD_POOR = 0.002
+LEV_SPREAD_FAIR = 0.001
+LEV_FUNDING_EXTREME_Z = 2.0
+LEV_VOL_SPIKE = 2.5
+LEV_VOL_BONUS_MED_THRESHOLD = 1.5
+LEV_VOL_BONUS_MIN_THRESHOLD = 0.5
+LEV_SCORE_AGGRESSIVE = 0.75
+LEV_SCORE_NORMAL = 0.40
+LEV_LOW = 5
+LEV_NORMAL = 10
+LEV_HIGH = 15
+LEV_VOL_SCORE_WEIGHT = 0.40
+LEV_TREND_SCORE_WEIGHT = 0.35
+LEV_VOLUME_SCORE_WEIGHT = 0.15
+LEV_LIQUIDITY_SCORE_WEIGHT = 0.10
+LEV_VOL_BONUS_HIGH = 0.5
+LEV_VOL_BONUS_MED = 0.3
+LEV_VOL_BONUS_LOW = -0.2
+LEV_LIQ_BONUS_EXCELLENT = 0.3
+LEV_LIQ_BONUS_POOR = -0.5
+
+# ── Scanner / indicatori entry ──────────────────────────────────
+SCANNER_DAY_MOVE_SCORE_MULT = 100
+SCANNER_DAY_MOVE_SCORE_CAP = 10
+SCANNER_DAY_MOVE_LATE_PCT = 0.08
+SCANNER_DAY_MOVE_LATE_PENALTY_MULT = 120
+SCANNER_DAY_MOVE_LATE_PENALTY_CAP = 18
+SCANNER_RANGE_MID_LOW = 0.35
+SCANNER_RANGE_MID_HIGH = 0.65
+SCANNER_RANGE_EXTREME_LOW = 0.25
+SCANNER_RANGE_EXTREME_HIGH = 0.75
+SCANNER_RANGE_MIDDLE_PENALTY = 18
+SCANNER_RANGE_NO_TRADE_PENALTY = 35
+SCANNER_TREND_LATE_LONG_RANGE_POS = 0.90
+SCANNER_TREND_LATE_SHORT_RANGE_POS = 0.10
+SCANNER_TREND_LATE_PENALTY = 15
+SCANNER_STRUCTURE_MIN_SCORE = 0.15
+SCANNER_RANGE_MIN_STRUCTURE_SCORE = 0.30
+SCANNER_MOMENTUM_WEIGHT_TREND = 12
+SCANNER_MOMENTUM_WEIGHT_RANGE = 8
+SCANNER_STRUCTURE_WEIGHT_TREND = 38
+SCANNER_STRUCTURE_WEIGHT_RANGE = 42
+SCANNER_VOL_OI_WEIGHT = 10
+SCANNER_FUNDING_WEIGHT = 10
+SCANNER_RVOL_WEIGHT = 10
+SCANNER_BTC_ALIGN_WEIGHT = 20
+SCANNER_MOM_6H_STRONG = 0.005
+SCANNER_MOM_6H_WEAK = 0.002
+SCANNER_MOM_6H_DIRECTION = 0.003
+SCANNER_RANGE_RSI_EXTREME_LOW = 35
+SCANNER_RANGE_RSI_EXTREME_HIGH = 65
+SCANNER_RANGE_RSI_EDGE_LOW = 40
+SCANNER_RANGE_RSI_EDGE_HIGH = 60
+SCANNER_RVOL_SPIKE = 1.5
+SCANNER_RANGE_FLAT_MOM_6H = 0.003
+SCANNER_COUNTER_TREND_PENALTY = 0.4
+SCANNER_STRUCTURE_MOM_STRONG_BONUS = 0.3
+SCANNER_STRUCTURE_MOM_WEAK_BONUS = 0.15
+SCANNER_STRUCTURE_EMA_BONUS = 0.2
+SCANNER_STRUCTURE_BREAKOUT_BONUS = 0.25
+SCANNER_STRUCTURE_HHLL_BONUS = 0.25
+SCANNER_STRUCTURE_RSI_EXTREME_BONUS = 0.3
+SCANNER_STRUCTURE_RSI_EDGE_BONUS = 0.15
+SCANNER_STRUCTURE_RANGE_EXTREME_BONUS = 0.3
+SCANNER_STRUCTURE_RANGE_EDGE_BONUS = 0.15
+SCANNER_STRUCTURE_RVOL_BONUS = 0.2
+SCANNER_STRUCTURE_REVERSAL_BONUS = 0.2
+
+ENTRY_LATE_MOM_5M_PCT = 0.012
+ENTRY_LATE_RSI_LONG = 72
+ENTRY_LATE_RSI_SHORT = 28
+ENTRY_LATE_BB_LONG = 1.05
+ENTRY_LATE_BB_SHORT = -1.05
+ENTRY_RANGE_MID_LOW = 0.35
+ENTRY_RANGE_MID_HIGH = 0.65
+ENTRY_RANGE_REQUIRE_EXTREME = True
+ENTRY_RANGE_LONG_MAX_POS = 0.35
+ENTRY_RANGE_SHORT_MIN_POS = 0.65
+ENTRY_MIN_CONFLUENCE = 3
+ENTRY_CANDIDATE_MAX_AGE_MULT = 4
+ENTRY_SKIP_DOUBLE_CONFIRM_PF = 1.2
+PROCESSOR_BTC_STRONG_MOM_1H = 0.003
+PROCESSOR_BTC_STRONG_MOM_4H = 0.002
+PROCESSOR_SLOPE_4H_BLOCK = 0.002
+PROCESSOR_BTC_DIR_MOM = 0.003
+ENTRY_MOMENTUM_RSI15_LONG_MIN = 40
+ENTRY_MOMENTUM_RSI15_LONG_MAX = 65
+ENTRY_MOMENTUM_RSI15_SHORT_MIN = 35
+ENTRY_MOMENTUM_RSI15_SHORT_MAX = 60
+ENTRY_MOMENTUM_RSI5_LONG_MIN = 45
+ENTRY_MOMENTUM_RSI5_SHORT_MAX = 55
+ENTRY_MOMENTUM_RSI1H_LONG_MAX = 75
+ENTRY_MOMENTUM_RSI1H_SHORT_MIN = 25
+ENTRY_MOMENTUM_SLOPE_1H = 0.001
+ENTRY_BREAKOUT_VOL15_MIN = 1.5
+ENTRY_BREAKOUT_VOL5_MIN = 1.0
+ENTRY_RANGE_RSI15_LONG_MAX = 35
+ENTRY_RANGE_RSI15_SHORT_MIN = 65
+ENTRY_RANGE_BB_LONG_MAX = -0.5
+ENTRY_RANGE_BB_SHORT_MIN = 0.5
+ENTRY_RANGE_SLOPE_1H_MAX_ADVERSE = 0.003
+ENTRY_RANGE_BODY_LONG_MIN = -0.2
+ENTRY_RANGE_BODY_SHORT_MAX = 0.2
+ENTRY_RANGE_SLOPE_5M_MAX_ADVERSE = 0.001
+ENTRY_RANGE_MACD_TURN_MULT = 0.5
+ENTRY_VOLUME_15M_MIN = 0.1
 # ── Missing aliases (ALT engine compatibility) ───────────────────
 TRADE_SIZE_USD = ALT_TRADE_SIZE_USD
 LEVERAGE = ALT_LEVERAGE
@@ -252,9 +427,9 @@ rpx = round_px  # alias
 
 def min_decimals_for_price(px):
     if px <= 0: return 6
-    for d in range(0, 10):
+    for d in range(0, PRICE_ROUND_MAX_DECIMALS):
         rounded = round(px, d)
-        if rounded > 0 and abs(rounded - px) / px < 0.005: return d
+        if rounded > 0 and abs(rounded - px) / px < PRICE_ROUND_REL_TOL: return d
     return 6
 # ================================================================
 # REDIS (shared)
@@ -1715,7 +1890,7 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
       • volatilità HIGH  (ATR% > 1.5%)       → forza 5x
       • spread POOR      (spread > 0.2%)      → forza 5x
       • funding estremo  (|z| > 2.0)          → forza 5x
-      • volume spike     (vol_rel > 2.5) AND
+      • volume spike     (vol_rel > LEV_VOL_SPIKE) AND
         volatilità LOW   (ATR% < 0.8%)        → forza 15x
       • trend STRONG     (ADX > 35) AND
         volatilità LOW                         → forza 15x
@@ -1727,11 +1902,11 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
       • liquidità:   POOR→-0.5 | FAIR→0 | EXCELLENT→+0.3
       Soglie:  score < 0.4 → 5x | 0.4-0.75 → 10x | > 0.75 → 15x
     """
-    _default = {"recommended_leverage": 10, "reasoning": "default (dati insufficienti)",
-                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": 0.7}
+    _default = {"recommended_leverage": LEV_DEFAULT, "reasoning": "default (dati insufficienti)",
+                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": LEV_LIQUIDITY_DEFAULT_SCORE}
     try:
-        df_15m = fetch_df(coin, "15m", 7)
-        if df_15m is None or len(df_15m) < 50:
+        df_15m = fetch_df(coin, "15m", LEV_LOOKBACK_DAYS)
+        if df_15m is None or len(df_15m) < LEV_MIN_CANDLES:
             return _default
 
         r       = df_15m.iloc[-1]
@@ -1742,20 +1917,20 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
         # ── STEP 1: ANALISI MERCATO ──────────────────────────────────
 
         # Volatilità
-        if atr_pct > 0.015:
+        if atr_pct > LEV_ATR_HIGH_PCT:
             vol_level = "HIGH"
-        elif atr_pct > 0.008:
+        elif atr_pct > LEV_ATR_MEDIUM_PCT:
             vol_level = "MEDIUM"
         else:
             vol_level = "LOW"
 
         # Trend (ADX)
         adx = float(r.get('adx', 20))
-        if adx > 35:
+        if adx > LEV_ADX_STRONG:
             trend_level = "STRONG"
-        elif adx > 25:
+        elif adx > LEV_ADX_MODERATE:
             trend_level = "MODERATE"
-        elif adx > 18:
+        elif adx > LEV_ADX_WEAK:
             trend_level = "WEAK"
         else:
             trend_level = "RANGING"
@@ -1766,16 +1941,16 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
         # Spread / liquidità
         try:
             liq    = fetch_liquidity_data(coin, px) if coin != "BTC" else fetch_liquidity()
-            spread = liq.get("spread_real", 0.001) if liq else 0.001
+            spread = liq.get("spread_real", LEV_SPREAD_FAIR) if liq else LEV_SPREAD_FAIR
         except Exception:
-            spread = 0.001
+            spread = LEV_SPREAD_FAIR
 
-        if spread > 0.002:
+        if spread > LEV_SPREAD_POOR:
             liq_level     = "POOR"
             liquidity_score = 0.0
-        elif spread > 0.001:
+        elif spread > LEV_SPREAD_FAIR:
             liq_level     = "FAIR"
-            liquidity_score = 0.5
+            liquidity_score = LEV_LIQUIDITY_FALLBACK_SCORE
         else:
             liq_level     = "EXCELLENT"
             liquidity_score = 1.0
@@ -1793,38 +1968,38 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
         best_lev    = 0   # 0 = nessuna regola hard attivata
 
         if vol_level == "HIGH":
-            best_lev    = 5
+            best_lev    = LEV_LOW
             hard_reason = f"volatilità ALTA (ATR {atr_pct:.2%})"
         elif liq_level == "POOR":
-            best_lev    = 5
+            best_lev    = LEV_LOW
             hard_reason = f"spread ALTO ({spread:.2%})"
-        elif abs(funding_z) > 2.0:
-            best_lev    = 5
+        elif abs(funding_z) > LEV_FUNDING_EXTREME_Z:
+            best_lev    = LEV_LOW
             hard_reason = f"funding estremo (z={funding_z:+.1f})"
-        elif vol_level == "LOW" and vol_rel > 2.5:
-            best_lev    = 15
+        elif vol_level == "LOW" and vol_rel > LEV_VOL_SPIKE:
+            best_lev    = LEV_HIGH
             hard_reason = f"volume spike ({vol_rel:.1f}x) + bassa volatilità"
         elif trend_level == "STRONG" and vol_level == "LOW":
-            best_lev    = 15
+            best_lev    = LEV_HIGH
             hard_reason = f"trend STRONG (ADX {adx:.0f}) + bassa volatilità"
 
         # — Score composito (solo se nessuna regola hard) —
         if best_lev == 0:
             vol_score   = {"LOW": 1.0, "MEDIUM": 0.5, "HIGH": 0.0}[vol_level]
             trend_score = {"RANGING": 0.0, "WEAK": 0.3, "MODERATE": 0.7, "STRONG": 1.0}[trend_level]
-            vol_bonus   = 0.5 if vol_rel > 2.5 else 0.3 if vol_rel > 1.5 else 0.0 if vol_rel >= 0.5 else -0.2
-            liq_bonus   = 0.3 if liq_level == "EXCELLENT" else 0.0 if liq_level == "FAIR" else -0.5
+            vol_bonus   = LEV_VOL_BONUS_HIGH if vol_rel > LEV_VOL_SPIKE else LEV_VOL_BONUS_MED if vol_rel > LEV_VOL_BONUS_MED_THRESHOLD else 0.0 if vol_rel >= LEV_VOL_BONUS_MIN_THRESHOLD else LEV_VOL_BONUS_LOW
+            liq_bonus   = LEV_LIQ_BONUS_EXCELLENT if liq_level == "EXCELLENT" else 0.0 if liq_level == "FAIR" else LEV_LIQ_BONUS_POOR
 
-            score = vol_score * 0.40 + trend_score * 0.35 + vol_bonus * 0.15 + liq_bonus * 0.10
+            score = vol_score * LEV_VOL_SCORE_WEIGHT + trend_score * LEV_TREND_SCORE_WEIGHT + vol_bonus * LEV_VOLUME_SCORE_WEIGHT + liq_bonus * LEV_LIQUIDITY_SCORE_WEIGHT
 
-            if score > 0.75:
-                best_lev    = 15
+            if score > LEV_SCORE_AGGRESSIVE:
+                best_lev    = LEV_HIGH
                 hard_reason = f"score {score:.2f} → aggressivo"
-            elif score >= 0.40:
-                best_lev    = 10
+            elif score >= LEV_SCORE_NORMAL:
+                best_lev    = LEV_NORMAL
                 hard_reason = f"score {score:.2f} → normale"
             else:
-                best_lev    = 5
+                best_lev    = LEV_LOW
                 hard_reason = f"score {score:.2f} → cautelativo"
 
         reasoning = (f"leva {best_lev}x | {hard_reason} | "
@@ -1843,8 +2018,8 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
 
     except Exception as e:
         log_btc(f"[LEV] Errore analisi: {e} → fallback 10x")
-        return {"recommended_leverage": 10, "reasoning": f"fallback ({e})",
-                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": 0.5}
+        return {"recommended_leverage": LEV_DEFAULT, "reasoning": f"fallback ({e})",
+                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": LEV_LIQUIDITY_FALLBACK_SCORE}
 
 
 def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = None,
@@ -1869,7 +2044,7 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     else:
         if capital_usd is None:
             capital_usd = get_balance()
-        margin_base = max(0.5, capital_usd * ALT_MARGIN_PCT)
+        margin_base = max(BASE_MARGIN_USD / 2, capital_usd * ALT_MARGIN_PCT)
 
     # Applica size_mult sul margine (prima di tutto il resto)
     margin_used = margin_base * size_mult
@@ -1887,7 +2062,7 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
 
     # Verifica finale (arrotondamento può abbassare di poco)
     final_notional = size * entry_px
-    if final_notional < MIN_NOTIONAL_USD - 0.01:
+    if final_notional < MIN_NOTIONAL_USD - FINAL_NOTIONAL_TOLERANCE_USD:
         min_size = MIN_NOTIONAL_USD / entry_px
         size = round_to_decimals(min_size, sz_dec)
         final_notional = size * entry_px
@@ -1911,15 +2086,15 @@ def tune_leverage_for_profit_target(coin: str, entry_px: float, tp_px: float,
             return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": "TP nullo"}
 
         net_tp_pct = tp_pct - TARGET_PROFIT_FEE_PCT
-        margin_eff = max(0.01, float(margin_usd) * max(0.01, float(size_mult)))
-        max_lev = max(1, int(max_leverage))
-        base_lev = max(1, min(int(current_leverage), max_lev))
+        margin_eff = max(SIZE_MULT_MIN, float(margin_usd) * max(SIZE_MULT_MIN, float(size_mult)))
+        max_lev = max(LEVERAGE_MIN, int(max_leverage))
+        base_lev = max(LEVERAGE_MIN, min(int(current_leverage), max_lev))
 
         if net_tp_pct <= 0:
             required_lev = max_lev
         else:
             required_notional = TARGET_PROFIT_USD / net_tp_pct
-            required_lev = max(1, int(math.ceil(required_notional / margin_eff)))
+            required_lev = max(LEVERAGE_MIN, int(math.ceil(required_notional / margin_eff)))
 
         chosen_lev = min(max(base_lev, required_lev), max_lev)
         notional = max(MIN_NOTIONAL_USD, margin_eff * chosen_lev)
@@ -2493,14 +2668,14 @@ def check_signal():
     # SL: ATR-based (rispetta il rumore reale del mercato)
     # TP: fissi 0.5% e 0.8%
     # SL = max(ATR×1.2, 0.4%) — mai più stretto del rumore, mai più largo di 1.5%
-    sl_dist = atr5 * 1.2
-    sl_dist = max(sl_dist, px * 0.004)   # floor 0.4% — minimo assoluto
-    sl_dist = min(sl_dist, px * 0.015)   # cap 1.5% — non troppo largo
-    tp1_dist = max(px * 0.005, sl_dist * 1.2)   # TP1 = almeno 1.2× SL
-    tp2_dist = max(px * 0.008, sl_dist * 2.0)   # TP2 = almeno 2× SL — garantisce R:R > 1
+    sl_dist = atr5 * BTC_SIGNAL_SL_ATR_MULT
+    sl_dist = max(sl_dist, px * BTC_SIGNAL_SL_FLOOR_PCT)   # floor minimo assoluto
+    sl_dist = min(sl_dist, px * BTC_SIGNAL_SL_CAP_PCT)   # cap massimo
+    tp1_dist = max(px * BTC_SIGNAL_TP1_FLOOR_PCT, sl_dist * BTC_SIGNAL_TP1_SL_MULT)
+    tp2_dist = max(px * BTC_SIGNAL_TP2_FLOOR_PCT, sl_dist * BTC_SIGNAL_TP2_SL_MULT)
 
-    tp1_dist = max(tp1_dist, px * 0.003)
-    tp2_dist = max(tp2_dist, px * 0.005)
+    tp1_dist = max(tp1_dist, px * BTC_SIGNAL_TP1_MIN_PCT)
+    tp2_dist = max(tp2_dist, px * BTC_SIGNAL_TP2_MIN_PCT)
 
     sl_dist *= sl_mult
     tp1_dist *= tp_mult
@@ -2861,7 +3036,7 @@ def recover_position(sz_dec, px_dec):
 
     if not has_sl:
         # ⚠️ CORREZIONE: Emergency SL al 20% (protezione catastrofica)
-        emergency_dist = entry * 0.20  # 20% - ampio ma evita liquidazione totale
+        emergency_dist = entry * BTC_RECOVERY_EMERGENCY_SL_PCT  # ampio ma evita liquidazione totale
         if d == "LONG":
             sl_px = rpx(entry - emergency_dist, px_dec)
         else:
@@ -2890,7 +3065,7 @@ def recover_position(sz_dec, px_dec):
                  {"trigger": {"triggerPx": tp_px, "isMarket": True, "tpsl": "tp"}},
                  True, timeout=15)
             log_btc(f"🎯 Recovery TP placed @ {tp_px}")
-            tp1_px = rpx(entry + atr_r * 1.2 if d == "LONG" else entry - atr_r * 1.2, px_dec)
+            tp1_px = rpx(entry + atr_r * BTC_RECOVERY_TP1_ATR_MULT if d == "LONG" else entry - atr_r * BTC_RECOVERY_TP1_ATR_MULT, px_dec)
         except Exception as e:
             log_btc(f"⚠️ Recovery TP failed: {e}")
     else:
@@ -2908,7 +3083,7 @@ def recover_position(sz_dec, px_dec):
         "sl_px": sl_px,
         "tp_px": tp_px,
         "tp1_px": tp1_px,
-        "sl_dist": entry * 0.012,
+        "sl_dist": entry * BTC_RECOVERED_SL_DIST_PCT,
         "sl_oid": None,
         "tp_oid": None,
         "partial_done": False,
@@ -2954,7 +3129,7 @@ def btc_check_partial_close(pos_state, mid, sz_dec, px_dec):
         return
 
     size = pos_state.get("size", abs(pos_state.get("szi", 0)))
-    close_size = rpx(size * 0.5, sz_dec)
+    close_size = rpx(size * BTC_PARTIAL_CLOSE_PCT, sz_dec)
     if close_size <= 0:
         return
 
@@ -3053,7 +3228,7 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
         
         # Verifica margine sufficiente
         bal = get_balance()
-        if margin_used > bal * 0.9:
+        if margin_used > bal * BALANCE_USAGE_MAX_PCT:
             log_btc(f"❌ Balance ${bal:.2f} insufficiente — margin richiesto ${margin_used:.2f}")
             return False
         
@@ -3065,7 +3240,7 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
             log_btc("❌ get_mid() failed")
             return False
 
-        px = rpx(mid * (1.0003 if is_long else 0.9997), px_dec)
+        px = rpx(mid * (BTC_ENTRY_LONG_MULT if is_long else BTC_ENTRY_SHORT_MULT), px_dec)
         log_btc(f"{'🟢' if is_long else '🔴'} ORDER {direction} [{scalp_mode}] @ {px} size:{size}")
 
 
@@ -3082,8 +3257,8 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
                     oid = s["resting"]["oid"]
 
         if not filled and oid:
-            for _ in range(4):
-                time.sleep(0.5)
+            for _ in range(BTC_ENTRY_FILL_POLL_ATTEMPTS):
+                time.sleep(BTC_ENTRY_FILL_POLL_INTERVAL)
                 p = get_position()
                 if p and abs(p.get("szi", 0)) > 0:
                     filled = True; break
@@ -3098,22 +3273,22 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
         # ── GET FILL PRICE ──
         pos = get_position()
         if not pos:
-            time.sleep(0.5)
+            time.sleep(BTC_POST_FILL_RETRY_DELAY)
             pos = get_position()
         if not pos:
             log_btc("❌ Position not found after fill"); return False
 
         entry_real = pos["entry"]
         size_real = rpx(abs(pos["szi"]), sz_dec)
-        atr = sl_dist / 1.2  # reverse ATR from sl_dist
+        atr = sl_dist / BTC_SL_ATR_REVERSE_MULT  # reverse ATR from sl_dist
 
         # ── SL/TP da ATR sul prezzo reale di fill ──
         if is_long:
             sl_px = rpx(entry_real - atr * 1.2, px_dec)
-            tp_px = rpx(entry_real + atr * 1.8, px_dec)
+            tp_px = rpx(entry_real + atr * BTC_TP_ATR_MULT, px_dec)
         else:
             sl_px = rpx(entry_real + atr * 1.2, px_dec)
-            tp_px = rpx(entry_real - atr * 1.8, px_dec)
+            tp_px = rpx(entry_real - atr * BTC_TP_ATR_MULT, px_dec)
 
         # ── PLACE SL ──
         _btc_sl_oid = None
@@ -3155,7 +3330,7 @@ def btc_market_close(side, size, mid, sz_dec, px_dec):
     """
     is_long = side == "LONG"
     # Prezzo aggressivo: vendi basso, compra alto
-    close_px = rpx(mid * (0.995 if is_long else 1.005), px_dec)
+    close_px = rpx(mid * (ALT_CLOSE_LONG_MULT if is_long else ALT_CLOSE_SHORT_MULT), px_dec)
     size_abs = rpx(size, sz_dec)
     try:
         res = call(_exchange.order, BTC_COIN, not is_long, size_abs, close_px,
@@ -4833,7 +5008,16 @@ def run_processor():
             slope_4h  = slope_1h
             r_4h      = r_1h        # per consenso MTF e AI
 
+            recent_high = float(df_15m['high'].iloc[-96:].max()) if len(df_15m) >= 96 else float(df_15m['high'].max())
+            recent_low  = float(df_15m['low'].iloc[-96:].min()) if len(df_15m) >= 96 else float(df_15m['low'].min())
+            range_pos_15m = (px - recent_low) / (recent_high - recent_low + 1e-10)
+            late_long = mom_4_5m > ENTRY_LATE_MOM_5M_PCT and (rsi > ENTRY_LATE_RSI_LONG or bb_pos > ENTRY_LATE_BB_LONG)
+            late_short = mom_4_5m < -ENTRY_LATE_MOM_5M_PCT and (rsi < ENTRY_LATE_RSI_SHORT or bb_pos < ENTRY_LATE_BB_SHORT)
+
             # ── FILTRI COMUNI ──
+            if late_long or late_short:
+                log_alt(f"[{coin}] skip entry tardiva: mom5m:{mom_4_5m:+.2%} RSI:{rsi:.1f} BB:{bb_pos:.2f}")
+                continue
             if oi_change < -0.10:
                 log_alt(f"[{coin}] Scartato: OI in forte calo ({oi_change:.3f})")
                 continue
@@ -4858,34 +5042,34 @@ def run_processor():
                 # ── BREAKOUT LONG ──
                 breakout_long = [
                     px > ema200_1h and macd_hist_1h > 0,
-                    (bb_expanding_15m or bb_squeezed_15m) and vol_rel_15m >= 1.5 and hh_15m >= 1,
+                    (bb_expanding_15m or bb_squeezed_15m) and vol_rel_15m >= ENTRY_BREAKOUT_VOL15_MIN and hh_15m >= 1,
                     slope > 0 and macd_hist_5m > 0 and px > ema20,
                     hh_5m >= 1,
-                    vol_rel >= 1.0,
+                    vol_rel >= ENTRY_BREAKOUT_VOL5_MIN,
                 ]
                 # ── MOMENTUM CONTINUATION LONG ──
                 momentum_long = [
-                    px > ema200_1h and slope_1h > 0.001,
-                    40 <= rsi_15m <= 65 and macd_hist_15m > 0,
-                    slope > 0 and rsi >= 45,
+                    px > ema200_1h and slope_1h > ENTRY_MOMENTUM_SLOPE_1H,
+                    ENTRY_MOMENTUM_RSI15_LONG_MIN <= rsi_15m <= ENTRY_MOMENTUM_RSI15_LONG_MAX and macd_hist_15m > 0,
+                    slope > 0 and rsi >= ENTRY_MOMENTUM_RSI5_LONG_MIN,
                     macd_hist_5m > 0,
-                    rsi_1h < 75,
+                    rsi_1h < ENTRY_MOMENTUM_RSI1H_LONG_MAX,
                 ]
                 # ── BREAKOUT SHORT ──
                 breakout_short = [
                     px < ema200_1h and macd_hist_1h < 0,
-                    (bb_expanding_15m or bb_squeezed_15m) and vol_rel_15m >= 1.5 and ll_15m >= 1,
+                    (bb_expanding_15m or bb_squeezed_15m) and vol_rel_15m >= ENTRY_BREAKOUT_VOL15_MIN and ll_15m >= 1,
                     slope < 0 and macd_hist_5m < 0 and px < ema20,
                     ll_5m >= 1,
-                    vol_rel >= 1.0,
+                    vol_rel >= ENTRY_BREAKOUT_VOL5_MIN,
                 ]
                 # ── MOMENTUM CONTINUATION SHORT ──
                 momentum_short = [
-                    px < ema200_1h and slope_1h < -0.001,
-                    35 <= rsi_15m <= 60 and macd_hist_15m < 0,
-                    slope < 0 and rsi <= 55,
+                    px < ema200_1h and slope_1h < -ENTRY_MOMENTUM_SLOPE_1H,
+                    ENTRY_MOMENTUM_RSI15_SHORT_MIN <= rsi_15m <= ENTRY_MOMENTUM_RSI15_SHORT_MAX and macd_hist_15m < 0,
+                    slope < 0 and rsi <= ENTRY_MOMENTUM_RSI5_SHORT_MAX,
                     macd_hist_5m < 0,
-                    rsi_1h > 25,
+                    rsi_1h > ENTRY_MOMENTUM_RSI1H_SHORT_MIN,
                 ]
 
                 bo_long_score  = sum(breakout_long)
@@ -4908,23 +5092,23 @@ def run_processor():
                 # ── REVERSAL LONG: prezzo al bottom del range + segni inversione ──
                 reversal_long = [
                     # SETUP 15m: RSI ipervenduto + BB bassa
-                    rsi_15m < 35 and bb_pos_15m < -0.5,
+                    rsi_15m < ENTRY_RANGE_RSI15_LONG_MAX and bb_pos_15m < ENTRY_RANGE_BB_LONG_MAX and range_pos_15m <= ENTRY_RANGE_LONG_MAX_POS,
                     # TREND 1h: prezzo non in crollo (slope non troppo negativo)
-                    slope_1h > -0.003,
+                    slope_1h > -ENTRY_RANGE_SLOPE_1H_MAX_ADVERSE,
                     # ENTRY 5m: candela di inversione (corpo piccolo o rialzista)
-                    body_ratio > -0.2 and slope > -0.001,
+                    body_ratio > ENTRY_RANGE_BODY_LONG_MIN and slope > -ENTRY_RANGE_SLOPE_5M_MAX_ADVERSE,
                     # ENTRY 5m: MACD sta girando (histogram meno negativo o positivo)
-                    macd_hist_5m > macd_hist_15m * 0.5 or macd_hist_5m > 0,
+                    macd_hist_5m > macd_hist_15m * ENTRY_RANGE_MACD_TURN_MULT or macd_hist_5m > 0,
                     # SETUP 15m: volume (conferma del test del supporto)
-                    vol_rel_15m >= 0.5,
+                    vol_rel_15m >= ENTRY_BREAKOUT_VOL15_MIN / 3,
                 ]
 
                 # ── REVERSAL SHORT: prezzo al top del range + segni inversione ──
                 reversal_short = [
-                    rsi_15m > 65 and bb_pos_15m > 0.5,
-                    slope_1h < 0.003,
-                    body_ratio < 0.2 and slope < 0.001,
-                    macd_hist_5m < macd_hist_15m * 0.5 or macd_hist_5m < 0,
+                    rsi_15m > ENTRY_RANGE_RSI15_SHORT_MIN and bb_pos_15m > ENTRY_RANGE_BB_SHORT_MIN and range_pos_15m >= ENTRY_RANGE_SHORT_MIN_POS,
+                    slope_1h < ENTRY_RANGE_SLOPE_1H_MAX_ADVERSE,
+                    body_ratio < ENTRY_RANGE_BODY_SHORT_MAX and slope < ENTRY_RANGE_SLOPE_5M_MAX_ADVERSE,
+                    macd_hist_5m < macd_hist_15m * ENTRY_RANGE_MACD_TURN_MULT or macd_hist_5m < 0,
                     vol_rel_15m >= 0.5,
                 ]
 
@@ -4950,12 +5134,12 @@ def run_processor():
                 "cat":        cat,
             })
 
-            # Scarta segnali deboli: minimo 3/5
-            if long_score < 3 and short_score < 3:
+            # Scarta segnali deboli: minimo configurabile
+            if long_score < ENTRY_MIN_CONFLUENCE and short_score < ENTRY_MIN_CONFLUENCE:
                 continue
 
             # Volume minimo: usa 15m (più stabile) non 5m
-            if vol_rel_15m < 0.1:
+            if vol_rel_15m < ENTRY_VOLUME_15M_MIN:
                 skip_counts["vol_rel"] += 1
                 continue
 
@@ -4969,20 +5153,20 @@ def run_processor():
             # tra 1h e 4h. Un dip 1h con 4h positivo = noise, non bloccare.
             if regime == "RANGE":
                 # BTC sale forte: 1h E 4h entrambi positivi sopra soglia
-                btc_strong_up   = btc_momentum > 0.003 and btc_mom_4h > 0.002
+                btc_strong_up   = btc_momentum > PROCESSOR_BTC_STRONG_MOM_1H and btc_mom_4h > PROCESSOR_BTC_STRONG_MOM_4H
                 # BTC scende forte: 1h E 4h entrambi negativi
-                btc_strong_down = btc_momentum < -0.003 and btc_mom_4h < -0.002
+                btc_strong_down = btc_momentum < -PROCESSOR_BTC_STRONG_MOM_1H and btc_mom_4h < -PROCESSOR_BTC_STRONG_MOM_4H
                 if btc_strong_up:
                     short_score = 0
                 if btc_strong_down:
                     long_score = 0
 
             # Scegli direzione
-            if long_score >= 3 and long_score > short_score:
+            if long_score >= ENTRY_MIN_CONFLUENCE and long_score > short_score:
                 direction     = "LONG"
                 confluence_n  = long_score
                 signal_type   = long_type
-            elif short_score >= 3 and short_score > long_score:
+            elif short_score >= ENTRY_MIN_CONFLUENCE and short_score > long_score:
                 direction     = "SHORT"
                 confluence_n  = short_score
                 signal_type   = short_type
@@ -4990,13 +5174,13 @@ def run_processor():
                 continue
 
             # ── FILTRO SLOPE 1h: blocca controtendenza forte ─────────
-            if direction == "SHORT" and slope_4h > 0.002:
+            if direction == "SHORT" and slope_4h > PROCESSOR_SLOPE_4H_BLOCK:
                 continue
-            if direction == "LONG" and slope_4h < -0.002:
+            if direction == "LONG" and slope_4h < -PROCESSOR_SLOPE_4H_BLOCK:
                 continue
 
             # ── BTC DECOUPLING: blocca solo controtendenza forte ──
-            btc_dir = "BULL" if btc_momentum > 0.003 else "BEAR" if btc_momentum < -0.003 else "NEUTRAL"
+            btc_dir = "BULL" if btc_momentum > PROCESSOR_BTC_DIR_MOM else "BEAR" if btc_momentum < -PROCESSOR_BTC_DIR_MOM else "NEUTRAL"
 
             can_trade = True  # default: trada
             # Blocca SOLO se controtendenza forte a BTC
@@ -5018,7 +5202,7 @@ def run_processor():
             prev_dir  = candidate.get("direction")
             prev_ts   = candidate.get("ts", 0)
             age       = time.time() - prev_ts
-            if age > PROCESSOR_INTERVAL * 8:  # candidato valido 4 min invece di 90s
+            if age > PROCESSOR_INTERVAL * ENTRY_CANDIDATE_MAX_AGE_MULT:
                 candidate = {}
 
             if not candidate or prev_dir != direction:
@@ -5077,8 +5261,8 @@ def run_processor():
                     "ts":               int(time.time())
                 })
 
-                # PF >= 1.2 → skip double confirmation
-                if bt["profit_factor"] >= 1.0:
+                # PF forte → skip double confirmation
+                if bt["profit_factor"] >= ENTRY_SKIP_DOUBLE_CONFIRM_PF:
                     log_alt(f"[{coin}] ⚡ PF:{bt['profit_factor']:.2f} >= 1.0 — skip double confirm")
                     candidate = get_candidate(coin)  # reload with backtest data
                 else:
@@ -5565,7 +5749,7 @@ def process_pending_orders(active_positions: dict, sz_dec: dict, px_dec: dict) -
         log_exec(f"[{coin}] Pendente eseguito → SL/TP size:{actual_size}")
         try:
             # [NO_SL] SL disabilitato
-            time.sleep(0.3)
+            time.sleep(ALT_PROTECTION_ORDER_DELAY)
             call(_exchange.order, str(coin), not is_buy, actual_size, tp_px,
                  {"trigger": {"triggerPx": tp_px, "isMarket": True, "tpsl": "tp"}},
                  True, timeout=15, label=f'tp_pend_{coin}')
@@ -5598,7 +5782,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     selected_leverage = lev_analysis["recommended_leverage"]
     
     # Cap leva a max 20x per ALT (sicurezza)
-    selected_leverage = min(selected_leverage, 20)
+    selected_leverage = min(selected_leverage, ALT_MAX_LEVERAGE)
     
     # ── IMPOSTA LEVA ──
     try:
@@ -5617,7 +5801,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     )
     
     # Verifica margine
-    if margin_used > balance * 0.9:
+    if margin_used > balance * BALANCE_USAGE_MAX_PCT:
         log_err(f"[{coin}] Margine insufficiente: need ${margin_used:.2f} have ${balance:.2f}")
         return False
     
@@ -5635,30 +5819,30 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         drift_pct = (mid_px - signal_px) / signal_px
 
         if direction == "LONG":
-            if drift_pct > 0.008:
+            if drift_pct > ALT_DRIFT_ENTRY_LATE_PCT:
                 # Prezzo salito >0.8% da quando è stato generato il segnale
                 # Il movimento è già avvenuto — entry tardiva con R:R peggiore
                 log_exec(f"[{coin}] ❌ LONG annullato: prezzo salito {drift_pct:+.2%} dal segnale (entry tardiva)")
                 delete_signal(coin)
                 return False
-            if drift_pct < -0.015:
+            if drift_pct < -ALT_DRIFT_INVALIDATE_PCT:
                 # Prezzo sceso >1.5% — il segnale è invalidato
                 log_exec(f"[{coin}] ❌ LONG annullato: prezzo sceso {drift_pct:+.2%} dal segnale (invalidato)")
                 delete_signal(coin)
                 return False
         else:  # SHORT
-            if drift_pct < -0.008:
+            if drift_pct < -ALT_DRIFT_ENTRY_LATE_PCT:
                 log_exec(f"[{coin}] ❌ SHORT annullato: prezzo sceso {drift_pct:+.2%} dal segnale (entry tardiva)")
                 delete_signal(coin)
                 return False
-            if drift_pct > 0.015:
+            if drift_pct > ALT_DRIFT_INVALIDATE_PCT:
                 log_exec(f"[{coin}] ❌ SHORT annullato: prezzo salito {drift_pct:+.2%} dal segnale (invalidato)")
                 delete_signal(coin)
                 return False
 
         # Se il prezzo si è mosso poco ma nella giusta direzione,
         # ricalcola SL/TP dal prezzo corrente per avere target freschi
-        if abs(drift_pct) > 0.002:
+        if abs(drift_pct) > ALT_DRIFT_REPRICE_PCT:
             sl_raw = float(signal.get("sl", 0) or 0)
             tp_raw = float(signal.get("tp", 0) or 0)
             if sl_raw > 0 and tp_raw > 0:
@@ -5688,12 +5872,12 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     def min_decimals_for_price(px: float) -> int:
         """Calcola i decimali minimi per cui round(px) != 0 e round(px) mantiene significatività."""
         if px <= 0:
-            return 6
-        for d in range(0, 10):
+            return PRICE_ROUND_FALLBACK_DECIMALS
+        for d in range(0, PRICE_ROUND_MAX_DECIMALS):
             rounded = round(px, d)
-            if rounded > 0 and abs(rounded - px) / px < 0.005:  # errore < 0.5%
+            if rounded > 0 and abs(rounded - px) / px < PRICE_ROUND_REL_TOL:
                 return d
-        return 6
+        return PRICE_ROUND_FALLBACK_DECIMALS
 
     # Usa il massimo tra px_dec dall'API e il minimo calcolato dal prezzo
     effective_px_dec = max(px_dec, min_decimals_for_price(mid_px))
@@ -5702,7 +5886,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     tp_test = round_to_decimals(tp_raw, effective_px_dec)
     entry_test = round_to_decimals(mid_px, effective_px_dec)
     if sl_test == entry_test or tp_test == entry_test:
-        effective_px_dec = min(effective_px_dec + 2, 8)
+        effective_px_dec = min(effective_px_dec + PRICE_ROUND_EXTRA_DECIMALS, PRICE_ROUND_MAX_EFFECTIVE_DECIMALS)
         log_exec(f"[{coin}] px_dec aumentato a {effective_px_dec} per distinguere SL/TP")
 
     entry_px = round_to_decimals(mid_px, effective_px_dec)
@@ -5717,7 +5901,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         return False
 
     target_info = tune_leverage_for_profit_target(
-        coin, entry_px, tp_px, TRADE_SIZE_USD, selected_leverage, 20, size_mult
+        coin, entry_px, tp_px, TRADE_SIZE_USD, selected_leverage, ALT_MAX_LEVERAGE, size_mult
     )
     selected_leverage = target_info["leverage"]
     log_exec(f"[{coin}] 🎯 Target profit: {target_info['reason']}")
@@ -5748,7 +5932,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
                     time.sleep(3 * (attempt + 1))
                 else:
                     raise
-        time.sleep(1.0)
+        time.sleep(ALT_POST_LEVERAGE_SLEEP)
 
         # Verifica leva effettiva: Hyperliquid può applicare un max inferiore
         actual_lev = get_effective_leverage(coin)
@@ -5762,12 +5946,12 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
 
             # TP: mantieni lo stesso R:R del segnale originale, con cap % prezzo
             tp_dist_old = abs(tp_px - entry_px)
-            rr_original = tp_dist_old / sl_dist_old if sl_dist_old > 0 else 1.1
+            rr_original = tp_dist_old / sl_dist_old if sl_dist_old > 0 else ALT_DEFAULT_RR
             tp_dist_new = sl_dist_new * rr_original  # stessa proporzionalità
 
             # Cap TP: scalping max 1.5%, swing max 5%
             trade_mode = signal.get("mode", "SCALPING")
-            tp_cap = entry_px * (0.015 if trade_mode == "SCALPING" else 0.05)
+            tp_cap = entry_px * (ALT_TP_CAP_SCALPING_PCT if trade_mode == "SCALPING" else ALT_TP_CAP_SWING_PCT)
             tp_dist_new = min(tp_dist_new, tp_cap)
 
             if is_buy:
@@ -5837,7 +6021,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
 
                     if not filled and oid_gtc:
                         for tick in range(GTC_TIMEOUT * 2):
-                            time.sleep(0.5)
+                            time.sleep(ALT_GTC_FILL_POLL_INTERVAL)
                             pos = get_open_positions()
                             if coin in pos:
                                 filled = True
@@ -5897,7 +6081,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         actual_size = round_to_decimals(filled_size, sz_dec)
 
         # [NO_SL] SL disabilitato
-        time.sleep(0.3)
+        time.sleep(ALT_PROTECTION_ORDER_DELAY)
         tp_res = call(_exchange.order, str(coin), not is_buy, actual_size, tp_px,
                       {"trigger": {"triggerPx": tp_px, "isMarket": True, "tpsl": "tp"}},
                       True, timeout=15, label=f'tp_{coin}')
@@ -5913,7 +6097,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
                     for o in get_open_trigger_orders(coin):
                         if o.get("orderType") == "Stop Market":
                             cancel_order(coin, o["oid"])
-                            time.sleep(0.2)
+                            time.sleep(ALT_TRAILING_CANCEL_DELAY)
                     pass  # [NO_SL] trailing stop disabilitato
                 except Exception as e:
                     log_err(f"[{coin}] trailing: {e}")
@@ -6393,7 +6577,8 @@ def run_scanner():
             prev_px = float(ctx.get("prevDayPx", 0) or 0)
             day_change = abs(px - prev_px) / prev_px if prev_px > 0 else 0
             # Score: bilancia movimento (abs day change) con liquidità (volume)
-            momentum_score = min(day_change * 100, 10)  # cap a 10 (= 10% move)
+            momentum_score = min(day_change * SCANNER_DAY_MOVE_SCORE_MULT, SCANNER_DAY_MOVE_SCORE_CAP)
+            late_move_penalty = min(max(day_change - SCANNER_DAY_MOVE_LATE_PCT, 0) * SCANNER_DAY_MOVE_LATE_PENALTY_MULT, SCANNER_DAY_MOVE_LATE_PENALTY_CAP)
 
             if vol24h < 200_000 or px <= 0:
                 continue
@@ -6489,55 +6674,59 @@ def run_scanner():
                     rsi_1h_approx = 100 - (100 / (1 + up_avg / (dn_avg + 1e-10))) if len(delta) >= 14 else 50
 
                     # Direzione coin
-                    if mom_6h > 0.003 and px > sc_ema20:
+                    if mom_6h > SCANNER_MOM_6H_DIRECTION and px > sc_ema20:
                         coin_direction = "UP"
-                    elif mom_6h < -0.003 and px < sc_ema20:
+                    elif mom_6h < -SCANNER_MOM_6H_DIRECTION and px < sc_ema20:
                         coin_direction = "DOWN"
 
                     if regime in ("BULL", "BEAR"):
-                        # ── TREND MODE: premia momentum + breakout ──
+                        # ── TREND MODE: premia momentum + breakout, penalizza estensioni mature ──
                         ss = 0.0
                         # Momentum forte (>0.5% in 6h)
-                        if abs(mom_6h) > 0.005:
-                            ss += 0.3
-                        elif abs(mom_6h) > 0.002:
-                            ss += 0.15
+                        if abs(mom_6h) > SCANNER_MOM_6H_STRONG:
+                            ss += SCANNER_STRUCTURE_MOM_STRONG_BONUS
+                        elif abs(mom_6h) > SCANNER_MOM_6H_WEAK:
+                            ss += SCANNER_STRUCTURE_MOM_WEAK_BONUS
                         # Prezzo sopra EMA20 (in BULL) o sotto (in BEAR)
                         if (regime == "BULL" and px > sc_ema20) or (regime == "BEAR" and px < sc_ema20):
-                            ss += 0.2
+                            ss += SCANNER_STRUCTURE_EMA_BONUS
                         # Vicino al breakout (top/bottom 20% del range)
-                        if (regime == "BULL" and range_pos > 0.8) or (regime == "BEAR" and range_pos < 0.2):
-                            ss += 0.25
+                        if (regime == "BULL" and range_pos > SCANNER_RANGE_EXTREME_HIGH) or (regime == "BEAR" and range_pos < SCANNER_RANGE_EXTREME_LOW):
+                            ss += SCANNER_STRUCTURE_BREAKOUT_BONUS
                         # Higher highs in BULL, lower lows in BEAR
                         if (regime == "BULL" and hh_scan >= 2) or (regime == "BEAR" and ll_scan >= 2):
-                            ss += 0.25
+                            ss += SCANNER_STRUCTURE_HHLL_BONUS
                         # PENALITÀ: coin che va CONTRO il regime
-                        if (regime == "BULL" and mom_6h < -0.003) or (regime == "BEAR" and mom_6h > 0.003):
-                            ss = max(0, ss - 0.4)
+                        if (regime == "BULL" and mom_6h < -SCANNER_MOM_6H_DIRECTION) or (regime == "BEAR" and mom_6h > SCANNER_MOM_6H_DIRECTION):
+                            ss = max(0, ss - SCANNER_COUNTER_TREND_PENALTY)
+                        if (regime == "BULL" and range_pos > SCANNER_TREND_LATE_LONG_RANGE_POS and day_change > SCANNER_DAY_MOVE_LATE_PCT) or (regime == "BEAR" and range_pos < SCANNER_TREND_LATE_SHORT_RANGE_POS and day_change > SCANNER_DAY_MOVE_LATE_PCT):
+                            ss = max(0, ss - SCANNER_TREND_LATE_PENALTY / 100)
                         structure_score = ss
 
                     else:
                         # ── RANGE MODE: premia estremi per reversal ──
                         ss = 0.0
                         # RSI estremo (< 35 o > 65)
-                        if rsi_1h_approx < 35 or rsi_1h_approx > 65:
-                            ss += 0.3
-                        elif rsi_1h_approx < 40 or rsi_1h_approx > 60:
-                            ss += 0.15
+                        if rsi_1h_approx < SCANNER_RANGE_RSI_EXTREME_LOW or rsi_1h_approx > SCANNER_RANGE_RSI_EXTREME_HIGH:
+                            ss += SCANNER_STRUCTURE_RSI_EXTREME_BONUS
+                        elif rsi_1h_approx < SCANNER_RANGE_RSI_EDGE_LOW or rsi_1h_approx > SCANNER_RANGE_RSI_EDGE_HIGH:
+                            ss += SCANNER_STRUCTURE_RSI_EDGE_BONUS
                         # Posizione agli estremi del range (<20% o >80%)
-                        if range_pos < 0.2 or range_pos > 0.8:
-                            ss += 0.3
-                        elif range_pos < 0.3 or range_pos > 0.7:
-                            ss += 0.15
+                        if range_pos < SCANNER_RANGE_EXTREME_LOW or range_pos > SCANNER_RANGE_EXTREME_HIGH:
+                            ss += SCANNER_STRUCTURE_RANGE_EXTREME_BONUS
+                        elif range_pos < ENTRY_RANGE_LONG_MAX_POS or range_pos > ENTRY_RANGE_SHORT_MIN_POS:
+                            ss += SCANNER_STRUCTURE_RANGE_EDGE_BONUS
                         # Volume spike (conferma del test del livello)
-                        if rvol > 1.5:
-                            ss += 0.2
+                        if rvol > SCANNER_RVOL_SPIKE:
+                            ss += SCANNER_STRUCTURE_RVOL_BONUS
                         # Segno di inversione: HH dopo LL o viceversa
-                        if (range_pos < 0.3 and hh_scan >= 1) or (range_pos > 0.7 and ll_scan >= 1):
-                            ss += 0.2
+                        if (range_pos < ENTRY_RANGE_LONG_MAX_POS and hh_scan >= 1) or (range_pos > ENTRY_RANGE_SHORT_MIN_POS and ll_scan >= 1):
+                            ss += SCANNER_STRUCTURE_REVERSAL_BONUS
                         # PENALITÀ: coin nel mezzo del range senza segnale
-                        if 0.35 < range_pos < 0.65 and abs(mom_6h) < 0.003:
-                            ss = max(0, ss - 0.3)
+                        if SCANNER_RANGE_MID_LOW < range_pos < SCANNER_RANGE_MID_HIGH:
+                            ss = max(0, ss - SCANNER_RANGE_MIDDLE_PENALTY / 100)
+                            if abs(mom_6h) < SCANNER_RANGE_FLAT_MOM_6H:
+                                ss = max(0, ss - SCANNER_RANGE_NO_TRADE_PENALTY / 100)
                         structure_score = ss
 
                 time.sleep(0.05)
@@ -6549,22 +6738,27 @@ def run_scanner():
             # In RANGE: struttura prezzo pesa uguale (coin agli estremi)
             if regime in ("BULL", "BEAR"):
                 composite = (
-                    vol_oi_score      * 10 +
-                    fz_score          * 10 +
-                    rvol_score        * 10 +
-                    btc_align_score   * 20 +
-                    structure_score   * 30 +
-                    momentum_score    * 20    # chi si muove ORA
-                ) - meme_lag_penalty
+                    vol_oi_score      * SCANNER_VOL_OI_WEIGHT +
+                    fz_score          * SCANNER_FUNDING_WEIGHT +
+                    rvol_score        * SCANNER_RVOL_WEIGHT +
+                    btc_align_score   * SCANNER_BTC_ALIGN_WEIGHT +
+                    structure_score   * SCANNER_STRUCTURE_WEIGHT_TREND +
+                    momentum_score    * SCANNER_MOMENTUM_WEIGHT_TREND
+                ) - meme_lag_penalty - late_move_penalty
             else:  # RANGE
                 composite = (
-                    vol_oi_score      * 10 +
-                    fz_score          * 10 +
-                    rvol_score        * 10 +
-                    btc_align_score   * 20 +
-                    structure_score   * 25 +
-                    momentum_score    * 25    # ancora più importante in range
-                ) - meme_lag_penalty
+                    vol_oi_score      * SCANNER_VOL_OI_WEIGHT +
+                    fz_score          * SCANNER_FUNDING_WEIGHT +
+                    rvol_score        * SCANNER_RVOL_WEIGHT +
+                    btc_align_score   * SCANNER_BTC_ALIGN_WEIGHT +
+                    structure_score   * SCANNER_STRUCTURE_WEIGHT_RANGE +
+                    momentum_score    * SCANNER_MOMENTUM_WEIGHT_RANGE
+                ) - meme_lag_penalty - late_move_penalty
+
+            if regime == "RANGE" and structure_score < SCANNER_RANGE_MIN_STRUCTURE_SCORE:
+                continue
+            if regime in ("BULL", "BEAR") and structure_score < SCANNER_STRUCTURE_MIN_SCORE:
+                continue
 
             composite = max(0, min(100, composite))
 
@@ -6841,15 +7035,15 @@ def executor_thread_alt():
                         # Non chiude automaticamente in perdita: l'uscita resta manuale/TP/smart TP.
 
                         # ── 2. SMART TP: in profitto >0.2% → prendi profitto ──
-                        if pnl_ratio > 0.002 and trade_age > 60 and profit_usd_live >= TARGET_PROFIT_USD:
+                        if pnl_ratio > ALT_SMART_TP_MIN_PNL_PCT and trade_age > ALT_SMART_TP_MIN_AGE_SEC and profit_usd_live >= TARGET_PROFIT_USD:
                             # Check se momentum sta girando contro
                             try:
                                 sig = get_all_signals().get(coin, {})
-                                atr_approx = abs(float(sig.get("sl", entry_px)) - entry_px) / 1.2 if sig else mid_px * 0.01
-                                if pnl_ratio > 0.004 or (atr_approx > 0 and (mid_px - entry_px if direction == "LONG" else entry_px - mid_px) >= atr_approx * 1.0):
+                                atr_approx = abs(float(sig.get("sl", entry_px)) - entry_px) / ALT_SMART_TP_ATR_SOURCE_MULT if sig else mid_px * ALT_SMART_TP_DEFAULT_ATR_PCT
+                                if pnl_ratio > ALT_SMART_TP_STRONG_PNL_PCT or (atr_approx > 0 and (mid_px - entry_px if direction == "LONG" else entry_px - mid_px) >= atr_approx * ALT_SMART_TP_ATR_MULT):
                                     log_exec(f"[{coin}] 💰 SMART TP +{pnl_ratio:.2%} (${profit_usd_live:.2f})")
                                     actual_size = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
-                                    close_px = round_to_decimals(mid_px * (0.995 if direction == "LONG" else 1.005), px_decimals.get(coin, 4))
+                                    close_px = round_to_decimals(mid_px * (ALT_CLOSE_LONG_MULT if direction == "LONG" else ALT_CLOSE_SHORT_MULT), px_decimals.get(coin, 4))
                                     call(_exchange.order, str(coin), direction != "LONG",
                                          actual_size, close_px,
                                          {"limit": {"tif": "Ioc"}}, False, timeout=10)
@@ -6895,7 +7089,7 @@ def executor_thread_alt():
 
                         # ── 3. Trailing (solo se non early cut e non smart TP) ──
                         if now - last_ts_update >= TRAILING_STOP_INTERVAL:
-                            atr_approx = abs(float((get_all_signals().get(coin,{}) or {}).get("sl", mid_px)) - mid_px) / 1.2
+                            atr_approx = abs(float((get_all_signals().get(coin,{}) or {}).get("sl", mid_px)) - mid_px) / ALT_SMART_TP_ATR_SOURCE_MULT
                             if atr_approx > 0:
                                 update_mechanical_trailing(coin, pos, mid_px, atr_approx,
                                     direction, open_trade_meta, sz_decimals, px_decimals)
@@ -7255,7 +7449,7 @@ def btc_executor_loop(sz_dec, px_dec):
                     last_pos_state["worst_pnl"] = pnl_ratio   # MAE
 
                 # ── 1. BREAK EVEN: +0.15% → sposta SL a entry (zero risk) ──
-                if pnl_ratio > 0.0015 and not last_pos_state["be_active"]:
+                if pnl_ratio > BTC_BREAK_EVEN_TRIGGER_PCT and not last_pos_state["be_active"]:
                     entry_be = last_pos_state.get("entry_px", last_pos_state.get("entry", 0))
                     if entry_be > 0:
                         try:
@@ -7277,9 +7471,9 @@ def btc_executor_loop(sz_dec, px_dec):
                 peak = last_pos_state["peak_pnl"]
 
                 # ── 4. TRAILING: dinamico in base al peak ──
-                trail_dist = 0.001 if peak < 0.003 else 0.0015  # 0.10% o 0.15%
+                trail_dist = BTC_TRAIL_DIST_LOW if peak < BTC_TRAIL_LOW_PEAK_THRESHOLD else BTC_TRAIL_DIST_HIGH
                 profit_usd_live = max(0.0, (mid - entry if d == "LONG" else entry - mid) * abs(szi))
-                if peak > 0.0015 and pnl_ratio < peak - trail_dist and profit_usd_live >= TARGET_PROFIT_USD:
+                if peak > BTC_TRAIL_EXIT_MIN_PEAK and pnl_ratio < peak - trail_dist and profit_usd_live >= TARGET_PROFIT_USD:
                     log_btc(f"🔒 TRAILING EXIT +{pnl_pct:.2f}% (${profit_usd_live:.2f}, peak:+{peak*100:.2f}%)")
                     btc_market_close(d, abs(szi), mid, sz_dec, px_dec)
                     last_pos_state["close_reason"] = f"🔒 Trail {pnl_pct:+.2f}%"
