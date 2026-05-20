@@ -120,7 +120,7 @@ MIN_CANDLES_TREND = 200; MIN_CANDLES_SETUP = 200; MIN_CANDLES_ENTRY = 200
 MIN_VOLUME_24H_USD = 200_000; MIN_VOLUME_TREND_MULT = 1.8
 FORWARD_WINDOW = 36
 MIN_PRECISION = 0.35; MIN_PRECISION_FLOOR = 0.28
-MIN_PROFIT_FACTOR = 1.2; MIN_PROFIT_FACTOR_FLOOR = 1.0
+MIN_PROFIT_FACTOR = 1.35; MIN_PROFIT_FACTOR_FLOOR = 1.20
 MIN_BACKTEST_TRADES = 20; VOLATILITY_MIN = 0.0015
 DEFAULT_CAPITAL = float(os.getenv("ACCOUNT_CAPITAL_USD", "1000"))
 API_TIMEOUT_SEC = 2; PROCESSOR_INTERVAL = 1 * 30
@@ -138,7 +138,7 @@ SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
 META_REFRESH_CYCLES = 2
 ENTRY_POLL_ATTEMPTS = 2; ENTRY_POLL_INTERVAL = 0.2
 COIN_COOLDOWN_MR = 3600; COIN_COOLDOWN_TREND = 14400; COIN_COOLDOWN = 3600
-SETUP_SCORE_MIN = 45  # soglia minima: trend(30) + spread ok(15) = 45 base senza AI
+SETUP_SCORE_MIN = 60  # severo: senza SL exchange servono setup davvero puliti
 ALT_TRAILING_INTERVAL = 10  # ALT trailing check ogni 30s
 SCANNER_INTERVAL = 2 * 60; SCANNER_MAX_UNIVERSE = 229
 PROCESSOR_MAX_COINS = 30
@@ -289,19 +289,19 @@ SCANNER_STRUCTURE_RANGE_EDGE_BONUS = 0.15
 SCANNER_STRUCTURE_RVOL_BONUS = 0.2
 SCANNER_STRUCTURE_REVERSAL_BONUS = 0.2
 
-ENTRY_LATE_MOM_5M_PCT = 0.012
-ENTRY_LATE_RSI_LONG = 72
-ENTRY_LATE_RSI_SHORT = 28
-ENTRY_LATE_BB_LONG = 1.05
-ENTRY_LATE_BB_SHORT = -1.05
+ENTRY_LATE_MOM_5M_PCT = 0.008
+ENTRY_LATE_RSI_LONG = 68
+ENTRY_LATE_RSI_SHORT = 32
+ENTRY_LATE_BB_LONG = 0.85
+ENTRY_LATE_BB_SHORT = -0.85
 ENTRY_RANGE_MID_LOW = 0.35
 ENTRY_RANGE_MID_HIGH = 0.65
 ENTRY_RANGE_REQUIRE_EXTREME = True
-ENTRY_RANGE_LONG_MAX_POS = 0.35
-ENTRY_RANGE_SHORT_MIN_POS = 0.65
-ENTRY_MIN_CONFLUENCE = 3
+ENTRY_RANGE_LONG_MAX_POS = 0.28
+ENTRY_RANGE_SHORT_MIN_POS = 0.72
+ENTRY_MIN_CONFLUENCE = 4
 ENTRY_CANDIDATE_MAX_AGE_MULT = 4
-ENTRY_SKIP_DOUBLE_CONFIRM_PF = 1.2
+ENTRY_SKIP_DOUBLE_CONFIRM_PF = 1.55
 PROCESSOR_BTC_STRONG_MOM_1H = 0.003
 PROCESSOR_BTC_STRONG_MOM_4H = 0.002
 PROCESSOR_SLOPE_4H_BLOCK = 0.002
@@ -327,6 +327,44 @@ ENTRY_RANGE_BODY_SHORT_MAX = 0.2
 ENTRY_RANGE_SLOPE_5M_MAX_ADVERSE = 0.001
 ENTRY_RANGE_MACD_TURN_MULT = 0.5
 ENTRY_VOLUME_15M_MIN = 0.1
+
+# ── Modalita senza SL exchange: filtri severi + uscita invalidazione ──
+STRICT_MIN_PROFIT_FACTOR = 1.35
+STRICT_MIN_WIN_RATE = 0.48
+STRICT_MIN_RECENT_PROFIT_FACTOR = 1.05
+STRICT_RECENT_MIN_TRADES = 10
+STRICT_MIN_AI_SCORE = 5
+STRICT_REQUIRE_AI_VALID = True
+INVALIDATION_EXIT_ENABLED = True
+INVALIDATION_ASSUME_OLD_ON_RESTART = True
+INVALIDATION_EXIT_MIN_AGE_SEC = 6 * 60 * 60
+INVALIDATION_EXIT_MAX_LOSS_PCT = -0.018
+INVALIDATION_CLOSE_PRICE_LONG_MULT = 0.999
+INVALIDATION_CLOSE_PRICE_SHORT_MULT = 1.001
+
+# ── Entry adattiva: AI + backtest + storico + indicatori ─────────────
+ADAPTIVE_ENTRY_ENABLED = True
+ADAPTIVE_ENTRY_MIN_TRADES = 6
+ADAPTIVE_ENTRY_LOOKBACK = 30
+ADAPTIVE_ENTRY_BAD_PF = 1.10
+ADAPTIVE_ENTRY_GOOD_PF = 1.80
+ADAPTIVE_ENTRY_BAD_WR = 0.45
+ADAPTIVE_ENTRY_GOOD_WR = 0.56
+ADAPTIVE_ENTRY_PF_MIN = 1.20
+ADAPTIVE_ENTRY_PF_MAX = 2.20
+ADAPTIVE_ENTRY_WR_MIN = 0.44
+ADAPTIVE_ENTRY_WR_MAX = 0.60
+ADAPTIVE_ENTRY_RECENT_PF_MIN = 0.95
+ADAPTIVE_ENTRY_RECENT_PF_MAX = 1.60
+ADAPTIVE_ENTRY_SETUP_MIN = 55
+ADAPTIVE_ENTRY_SETUP_MAX = 78
+ADAPTIVE_ENTRY_AI_MIN = 4
+ADAPTIVE_ENTRY_AI_MAX = 7
+ADAPTIVE_ENTRY_CONFLUENCE_MIN = 3
+ADAPTIVE_ENTRY_CONFLUENCE_MAX = 5
+ADAPTIVE_ENTRY_RANGE_STEP = 0.03
+ADAPTIVE_ENTRY_LATE_MOM_STEP = 0.0015
+ADAPTIVE_ENTRY_SCORE_STEP = 5
 # ── Missing aliases (ALT engine compatibility) ───────────────────
 TRADE_SIZE_USD = ALT_TRADE_SIZE_USD
 LEVERAGE = ALT_LEVERAGE
@@ -3334,7 +3372,7 @@ def btc_market_close(side, size, mid, sz_dec, px_dec):
     size_abs = rpx(size, sz_dec)
     try:
         res = call(_exchange.order, BTC_COIN, not is_long, size_abs, close_px,
-                   {"limit": {"tif": "Ioc"}}, False, timeout=15)
+                   {"limit": {"tif": "Ioc"}}, True, timeout=15)
         return res and res.get("status") == "ok"
     except Exception as e:
         log_btc(f"Market close error: {e}")
@@ -3750,6 +3788,144 @@ def save_trade_outcome(trade: dict):
         _rset("state:trade_history", history)
     except Exception as e:
         log_err(f"save_trade_outcome: {e}")
+
+
+def clamp_entry_value(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def calc_profit_factor_from_pnl(pnls: list[float]) -> float:
+    wins = sum(x for x in pnls if x > 0)
+    losses = abs(sum(x for x in pnls if x < 0))
+    if wins <= 0 and losses <= 0:
+        return 1.0
+    if losses <= 0:
+        return 10.0
+    return min(10.0, wins / (losses + 1e-10))
+
+
+def get_entry_learning_stats(coin: str, regime: str, strategy: str) -> dict:
+    history = load_trade_history()
+    if not history:
+        return {"n": 0, "wr": 0.5, "pf": 1.0, "avg_pnl": 0.0}
+
+    def _match(t, strict: bool) -> bool:
+        if t.get("outcome") not in ("win", "loss"):
+            return False
+        if strict:
+            return (t.get("coin") == coin and t.get("regime") == regime and
+                    t.get("strategy") == strategy)
+        return t.get("coin") == coin or (t.get("regime") == regime and t.get("strategy") == strategy)
+
+    sample = [t for t in history if _match(t, True)]
+    if len(sample) < ADAPTIVE_ENTRY_MIN_TRADES:
+        sample = [t for t in history if _match(t, False)]
+    sample = sample[-ADAPTIVE_ENTRY_LOOKBACK:]
+    if not sample:
+        return {"n": 0, "wr": 0.5, "pf": 1.0, "avg_pnl": 0.0}
+
+    wins = sum(1 for t in sample if t.get("outcome") == "win")
+    pnls = [float(t.get("pnl_pct", 0) or 0) for t in sample]
+    return {
+        "n": len(sample),
+        "wr": wins / len(sample),
+        "pf": calc_profit_factor_from_pnl(pnls),
+        "avg_pnl": sum(pnls) / len(pnls),
+    }
+
+
+def build_adaptive_entry_profile(coin: str, regime: str, strategy: str,
+                                 bt: dict | None = None, ai_score: int | None = None,
+                                 ml_prob: float | None = None, vol_rel: float = 1.0) -> dict:
+    profile = {
+        "pf_min": STRICT_MIN_PROFIT_FACTOR,
+        "wr_min": STRICT_MIN_WIN_RATE,
+        "recent_pf_min": STRICT_MIN_RECENT_PROFIT_FACTOR,
+        "setup_min": SETUP_SCORE_MIN,
+        "ai_min": STRICT_MIN_AI_SCORE,
+        "confluence_min": ENTRY_MIN_CONFLUENCE,
+        "double_confirm_pf": ENTRY_SKIP_DOUBLE_CONFIRM_PF,
+        "range_long_max": ENTRY_RANGE_LONG_MAX_POS,
+        "range_short_min": ENTRY_RANGE_SHORT_MIN_POS,
+        "late_mom_pct": ENTRY_LATE_MOM_5M_PCT,
+        "late_rsi_long": ENTRY_LATE_RSI_LONG,
+        "late_rsi_short": ENTRY_LATE_RSI_SHORT,
+        "late_bb_long": ENTRY_LATE_BB_LONG,
+        "late_bb_short": ENTRY_LATE_BB_SHORT,
+        "volume_15m_min": ENTRY_VOLUME_15M_MIN,
+        "reason": "base",
+    }
+    if not ADAPTIVE_ENTRY_ENABLED:
+        return profile
+
+    stats = get_entry_learning_stats(coin, regime, strategy)
+    quality = 0
+    reasons = []
+
+    if stats["n"] >= ADAPTIVE_ENTRY_MIN_TRADES:
+        if stats["pf"] < ADAPTIVE_ENTRY_BAD_PF or stats["wr"] < ADAPTIVE_ENTRY_BAD_WR or stats["avg_pnl"] < 0:
+            quality -= 1
+            reasons.append(f"hist debole PF:{stats['pf']:.2f} WR:{stats['wr']:.0%}")
+        elif stats["pf"] >= ADAPTIVE_ENTRY_GOOD_PF and stats["wr"] >= ADAPTIVE_ENTRY_GOOD_WR and stats["avg_pnl"] > 0:
+            quality += 1
+            reasons.append(f"hist forte PF:{stats['pf']:.2f} WR:{stats['wr']:.0%}")
+    else:
+        quality -= 1
+        reasons.append(f"pochi trade n={stats['n']}")
+
+    if bt:
+        pf = float(bt.get("profit_factor", 0) or 0)
+        wr = float(bt.get("win_rate", 0) or 0)
+        pf_recent = float(bt.get("profit_factor_recent", pf) or pf)
+        if pf_recent < STRICT_MIN_RECENT_PROFIT_FACTOR or pf < STRICT_MIN_PROFIT_FACTOR or wr < STRICT_MIN_WIN_RATE:
+            quality -= 1
+            reasons.append(f"BT debole PF:{pf:.2f} PFr:{pf_recent:.2f}")
+        elif pf >= ADAPTIVE_ENTRY_GOOD_PF and pf_recent >= STRICT_MIN_PROFIT_FACTOR and wr >= ADAPTIVE_ENTRY_GOOD_WR:
+            quality += 1
+            reasons.append(f"BT forte PF:{pf:.2f} PFr:{pf_recent:.2f}")
+
+    if ai_score is not None:
+        if ai_score <= STRICT_MIN_AI_SCORE:
+            quality -= 1
+            reasons.append(f"AI basso:{ai_score}")
+        elif ai_score >= 8:
+            quality += 1
+            reasons.append(f"AI alto:{ai_score}")
+
+    if ml_prob is not None:
+        if ml_prob < 0.48:
+            quality -= 1
+            reasons.append(f"ML basso:{ml_prob:.0%}")
+        elif ml_prob > 0.62:
+            quality += 1
+            reasons.append(f"ML alto:{ml_prob:.0%}")
+
+    if vol_rel >= 2.0:
+        quality -= 1
+        reasons.append(f"vol alta:{vol_rel:.1f}x")
+
+    quality = int(clamp_entry_value(quality, -2, 2))
+    tight = max(0, -quality)
+    loose = max(0, quality)
+
+    profile["pf_min"] = round(clamp_entry_value(STRICT_MIN_PROFIT_FACTOR + tight * 0.15 - loose * 0.08, ADAPTIVE_ENTRY_PF_MIN, ADAPTIVE_ENTRY_PF_MAX), 2)
+    profile["wr_min"] = round(clamp_entry_value(STRICT_MIN_WIN_RATE + tight * 0.03 - loose * 0.02, ADAPTIVE_ENTRY_WR_MIN, ADAPTIVE_ENTRY_WR_MAX), 3)
+    profile["recent_pf_min"] = round(clamp_entry_value(STRICT_MIN_RECENT_PROFIT_FACTOR + tight * 0.10 - loose * 0.05, ADAPTIVE_ENTRY_RECENT_PF_MIN, ADAPTIVE_ENTRY_RECENT_PF_MAX), 2)
+    profile["setup_min"] = int(clamp_entry_value(SETUP_SCORE_MIN + tight * ADAPTIVE_ENTRY_SCORE_STEP - loose * 3, ADAPTIVE_ENTRY_SETUP_MIN, ADAPTIVE_ENTRY_SETUP_MAX))
+    profile["ai_min"] = int(clamp_entry_value(STRICT_MIN_AI_SCORE + tight - loose, ADAPTIVE_ENTRY_AI_MIN, ADAPTIVE_ENTRY_AI_MAX))
+    profile["confluence_min"] = int(clamp_entry_value(ENTRY_MIN_CONFLUENCE + tight - loose, ADAPTIVE_ENTRY_CONFLUENCE_MIN, ADAPTIVE_ENTRY_CONFLUENCE_MAX))
+    profile["double_confirm_pf"] = round(clamp_entry_value(ENTRY_SKIP_DOUBLE_CONFIRM_PF + tight * 0.20 - loose * 0.10, profile["pf_min"], 2.50), 2)
+    profile["range_long_max"] = round(clamp_entry_value(ENTRY_RANGE_LONG_MAX_POS - tight * ADAPTIVE_ENTRY_RANGE_STEP + loose * 0.015, 0.18, 0.35), 3)
+    profile["range_short_min"] = round(clamp_entry_value(ENTRY_RANGE_SHORT_MIN_POS + tight * ADAPTIVE_ENTRY_RANGE_STEP - loose * 0.015, 0.65, 0.82), 3)
+    profile["late_mom_pct"] = round(clamp_entry_value(ENTRY_LATE_MOM_5M_PCT - tight * ADAPTIVE_ENTRY_LATE_MOM_STEP + loose * 0.001, 0.004, 0.012), 4)
+    profile["late_rsi_long"] = int(clamp_entry_value(ENTRY_LATE_RSI_LONG - tight * 2 + loose, 62, 72))
+    profile["late_rsi_short"] = int(clamp_entry_value(ENTRY_LATE_RSI_SHORT + tight * 2 - loose, 28, 38))
+    profile["late_bb_long"] = round(clamp_entry_value(ENTRY_LATE_BB_LONG - tight * 0.10 + loose * 0.05, 0.55, 1.05), 2)
+    profile["late_bb_short"] = round(clamp_entry_value(ENTRY_LATE_BB_SHORT + tight * 0.10 - loose * 0.05, -1.05, -0.55), 2)
+    profile["quality"] = quality
+    profile["stats"] = stats
+    profile["reason"] = "; ".join(reasons) if reasons else "base"
+    return profile
 
 
 def is_circuit_breaker_active() -> tuple[bool, str]:
@@ -5011,8 +5187,10 @@ def run_processor():
             recent_high = float(df_15m['high'].iloc[-96:].max()) if len(df_15m) >= 96 else float(df_15m['high'].max())
             recent_low  = float(df_15m['low'].iloc[-96:].min()) if len(df_15m) >= 96 else float(df_15m['low'].min())
             range_pos_15m = (px - recent_low) / (recent_high - recent_low + 1e-10)
-            late_long = mom_4_5m > ENTRY_LATE_MOM_5M_PCT and (rsi > ENTRY_LATE_RSI_LONG or bb_pos > ENTRY_LATE_BB_LONG)
-            late_short = mom_4_5m < -ENTRY_LATE_MOM_5M_PCT and (rsi < ENTRY_LATE_RSI_SHORT or bb_pos < ENTRY_LATE_BB_SHORT)
+            planned_strategy = "MOMENTUM" if regime in ("BULL", "BEAR") else "REVERSAL"
+            entry_profile = build_adaptive_entry_profile(coin, regime, planned_strategy, vol_rel=vol_rel)
+            late_long = mom_4_5m > entry_profile["late_mom_pct"] and (rsi > entry_profile["late_rsi_long"] or bb_pos > entry_profile["late_bb_long"])
+            late_short = mom_4_5m < -entry_profile["late_mom_pct"] and (rsi < entry_profile["late_rsi_short"] or bb_pos < entry_profile["late_bb_short"])
 
             # ── FILTRI COMUNI ──
             if late_long or late_short:
@@ -5092,7 +5270,7 @@ def run_processor():
                 # ── REVERSAL LONG: prezzo al bottom del range + segni inversione ──
                 reversal_long = [
                     # SETUP 15m: RSI ipervenduto + BB bassa
-                    rsi_15m < ENTRY_RANGE_RSI15_LONG_MAX and bb_pos_15m < ENTRY_RANGE_BB_LONG_MAX and range_pos_15m <= ENTRY_RANGE_LONG_MAX_POS,
+                    rsi_15m < ENTRY_RANGE_RSI15_LONG_MAX and bb_pos_15m < ENTRY_RANGE_BB_LONG_MAX and range_pos_15m <= entry_profile["range_long_max"],
                     # TREND 1h: prezzo non in crollo (slope non troppo negativo)
                     slope_1h > -ENTRY_RANGE_SLOPE_1H_MAX_ADVERSE,
                     # ENTRY 5m: candela di inversione (corpo piccolo o rialzista)
@@ -5105,7 +5283,7 @@ def run_processor():
 
                 # ── REVERSAL SHORT: prezzo al top del range + segni inversione ──
                 reversal_short = [
-                    rsi_15m > ENTRY_RANGE_RSI15_SHORT_MIN and bb_pos_15m > ENTRY_RANGE_BB_SHORT_MIN and range_pos_15m >= ENTRY_RANGE_SHORT_MIN_POS,
+                    rsi_15m > ENTRY_RANGE_RSI15_SHORT_MIN and bb_pos_15m > ENTRY_RANGE_BB_SHORT_MIN and range_pos_15m >= entry_profile["range_short_min"],
                     slope_1h < ENTRY_RANGE_SLOPE_1H_MAX_ADVERSE,
                     body_ratio < ENTRY_RANGE_BODY_SHORT_MAX and slope < ENTRY_RANGE_SLOPE_5M_MAX_ADVERSE,
                     macd_hist_5m < macd_hist_15m * ENTRY_RANGE_MACD_TURN_MULT or macd_hist_5m < 0,
@@ -5135,11 +5313,11 @@ def run_processor():
             })
 
             # Scarta segnali deboli: minimo configurabile
-            if long_score < ENTRY_MIN_CONFLUENCE and short_score < ENTRY_MIN_CONFLUENCE:
+            if long_score < entry_profile["confluence_min"] and short_score < entry_profile["confluence_min"]:
                 continue
 
             # Volume minimo: usa 15m (più stabile) non 5m
-            if vol_rel_15m < ENTRY_VOLUME_15M_MIN:
+            if vol_rel_15m < entry_profile["volume_15m_min"]:
                 skip_counts["vol_rel"] += 1
                 continue
 
@@ -5162,11 +5340,11 @@ def run_processor():
                     long_score = 0
 
             # Scegli direzione
-            if long_score >= ENTRY_MIN_CONFLUENCE and long_score > short_score:
+            if long_score >= entry_profile["confluence_min"] and long_score > short_score:
                 direction     = "LONG"
                 confluence_n  = long_score
                 signal_type   = long_type
-            elif short_score >= ENTRY_MIN_CONFLUENCE and short_score > long_score:
+            elif short_score >= entry_profile["confluence_min"] and short_score > long_score:
                 direction     = "SHORT"
                 confluence_n  = short_score
                 signal_type   = short_type
@@ -5222,11 +5400,12 @@ def run_processor():
 
                 pf_full = bt["profit_factor"]
                 cycle_wr_samples.append(pf_full)
+                entry_profile = build_adaptive_entry_profile(coin, regime, strategy, bt=bt, vol_rel=vol_rel)
 
                 if len(cycle_wr_samples) >= 3:
-                    dynamic_threshold = max(MIN_PROFIT_FACTOR_FLOOR, float(np.median(cycle_wr_samples)) - 0.1)
+                    dynamic_threshold = max(entry_profile["pf_min"], float(np.median(cycle_wr_samples)) - 0.1)
                 else:
-                    dynamic_threshold = MIN_PROFIT_FACTOR
+                    dynamic_threshold = entry_profile["pf_min"]
 
                 if pf_full < dynamic_threshold:
                     log_alt(f"[{coin}] ❌ Edge PF:{pf_full:.2f} < {dynamic_threshold:.2f} — no edge")
@@ -5235,10 +5414,9 @@ def run_processor():
 
                 # ── LIVELLO 2: REGIME CHECK ───────────────────────────
                 # L'edge storico è buono, ma il regime attuale lo supporta?
-                # Se gli ultimi 50 trade hanno PF < 0.8 → mercato cambiato, skip
                 pf_recent = bt["profit_factor_recent"]
-                if bt["n_trades_recent"] >= 10 and pf_recent < 0.8:
-                    log_alt(f"[{coin}] ❌ Regime sfavorevole: PF recente {pf_recent:.2f} < 0.8 (edge storico ok: {pf_full:.2f})")
+                if bt["n_trades_recent"] >= STRICT_RECENT_MIN_TRADES and pf_recent < entry_profile["recent_pf_min"]:
+                    log_alt(f"[{coin}] ❌ Regime sfavorevole: PF recente {pf_recent:.2f} < {entry_profile['recent_pf_min']:.2f} (edge storico ok: {pf_full:.2f})")
                     clear_candidate(coin)
                     continue
 
@@ -5258,12 +5436,13 @@ def run_processor():
                     "profit_factor_recent": bt["profit_factor_recent"],
                     "n_trades":         bt["n_trades"],
                     "avg_return":       bt.get("avg_return", 0),
+                    "entry_profile":    entry_profile,
                     "ts":               int(time.time())
                 })
 
-                # PF forte → skip double confirmation
-                if bt["profit_factor"] >= ENTRY_SKIP_DOUBLE_CONFIRM_PF:
-                    log_alt(f"[{coin}] ⚡ PF:{bt['profit_factor']:.2f} >= 1.0 — skip double confirm")
+                # PF molto forte → skip double confirmation
+                if bt["profit_factor"] >= entry_profile["double_confirm_pf"]:
+                    log_alt(f"[{coin}] ⚡ PF:{bt['profit_factor']:.2f} >= {entry_profile['double_confirm_pf']:.2f} — skip double confirm")
                     candidate = get_candidate(coin)  # reload with backtest data
                 else:
                     log_alt(f"[{coin}] ⏳ Candidato salvato [{signal_type}] [{pre_mode}]")
@@ -5275,10 +5454,16 @@ def run_processor():
             wr_hist   = candidate.get("win_rate", 0)
             wr_recent = candidate.get("win_rate_recent", 0)
             pf_hist   = candidate.get("profit_factor", 0)
+            entry_profile = candidate.get("entry_profile") or build_adaptive_entry_profile(coin, regime, strategy, vol_rel=vol_rel)
 
-            if pf_hist > 0 and pf_hist < 1.0:
+            if pf_hist > 0 and pf_hist < entry_profile["pf_min"]:
                 skip_counts["wr_recente"] += 1
-                log_alt(f"[{coin}] ❌ PF:{pf_hist:.2f} < 1.0 — skip")
+                log_alt(f"[{coin}] ❌ PF:{pf_hist:.2f} < {entry_profile['pf_min']:.2f} — skip")
+                clear_candidate(coin)
+                continue
+            if wr_hist > 0 and wr_hist < entry_profile["wr_min"]:
+                skip_counts["wr_recente"] += 1
+                log_alt(f"[{coin}] ❌ WR:{wr_hist:.1%} < {entry_profile['wr_min']:.1%} — skip")
                 clear_candidate(coin)
                 continue
 
@@ -5297,11 +5482,23 @@ def run_processor():
                 active_positions=_active_positions_cache
             )
 
-            # AI è soft filter — non blocca, scala size
-            # ai_score < 3 → size ×0.5, ai_score 3-5 → size ×0.7, 6+ → size ×1.0
-            if not ai_valid:
-                log_alt(f"[{coin}] ⚠️ AI scettica — {ai_reason} (size ridotta, non bloccata)")
-                ai_score = max(ai_score, 2)  # floor a 2 per non bloccare
+            ai_reason_l = str(ai_reason).lower()
+            ai_is_fallback = "fallback" in ai_reason_l or "bypass" in ai_reason_l
+            entry_profile = build_adaptive_entry_profile(
+                coin, regime, strategy, bt=candidate,
+                ai_score=None if ai_is_fallback else ai_score, vol_rel=vol_rel
+            )
+            log_alt(f"[{coin}] 🧠 Entry adattiva: q={entry_profile.get('quality',0)} PF>{entry_profile['pf_min']:.2f} WR>{entry_profile['wr_min']:.0%} setup>{entry_profile['setup_min']} conf>{entry_profile['confluence_min']} | {entry_profile['reason']}")
+
+            # AI: se e reale diventa filtro; il fallback neutro non deve paralizzare il bot.
+            if not ai_valid and STRICT_REQUIRE_AI_VALID and not ai_is_fallback:
+                log_alt(f"[{coin}] ❌ AI scettica — {ai_reason}")
+                clear_candidate(coin)
+                continue
+            if not ai_is_fallback and ai_score < entry_profile["ai_min"]:
+                log_alt(f"[{coin}] ❌ AI score {ai_score}/10 < {entry_profile['ai_min']}/10")
+                clear_candidate(coin)
+                continue
             ai_size_mult = 1.0
             if ai_score < 3:
                 ai_size_mult = 0.5
@@ -5312,12 +5509,10 @@ def run_processor():
                 direction, px, ema50_val, ema200_4h,
                 rsi, spread_pct, ai_score, funding_z, liq=liq_data
             )
-            # PF >= 1.2 dal backtest → setup score irrilevante
-            if pf_hist >= 1.2:
-                setup_score = max(setup_score, 60)
-            if setup_score < SETUP_SCORE_MIN:
+            # Anche con PF alto il setup corrente deve superare la soglia.
+            if setup_score < entry_profile["setup_min"]:
                 skip_counts["score"] += 1
-                log_alt(f"[{coin}] ❌ Setup score {setup_score} < {SETUP_SCORE_MIN}")
+                log_alt(f"[{coin}] ❌ Setup score {setup_score} < {entry_profile['setup_min']}")
                 clear_candidate(coin)
                 continue
 
@@ -5341,6 +5536,7 @@ def run_processor():
                 clear_candidate(coin)
                 continue
             ml_size_mult = ml_alt_info.get("size_mult", 1.0)
+            entry_profile = build_adaptive_entry_profile(coin, regime, strategy, bt=candidate, ai_score=None if ai_is_fallback else ai_score, ml_prob=ml_alt_prob, vol_rel=vol_rel)
             if ml_alt_info["action"] != "OBSERVE":
                 log_alt(f"[{coin}] 🤖 ML-ALT: P(win)={ml_alt_prob:.0%} → {ml_alt_info['action']} size×{ml_size_mult:.2f} (n={ml_alt_info['n_samples']})")
 
@@ -5416,6 +5612,7 @@ def run_processor():
                 "regime":        regime,
                 "strategy":      strategy,
                 "is_btc_eth":    is_btc_eth,
+                "entry_profile":  entry_profile,
             })
 
         except TimeoutError:
@@ -5468,6 +5665,7 @@ def run_processor():
             "range_pump":      False,
             "signal_type":     best["signal_type"],
             "rank_score":      best["rank_score"],
+            "entry_profile":    best.get("entry_profile", {}),
             "ts":              int(time.time())
         }
         publish_signal(coin_best, signal_data)
@@ -6994,6 +7192,7 @@ def executor_thread_alt():
                         "tp":          tp,
                         "outcome":     outcome,
                         "pnl_pct":     round(pnl_pct * 100, 2),
+                        "entry_profile": sig.get("entry_profile", {}),
                         "ts_open":     ts_open,
                         "ts_close":    time.time()
                     }
@@ -7027,12 +7226,26 @@ def executor_thread_alt():
                         szi = pos.get("szi", 0)
                         direction = "LONG" if szi > 0 else "SHORT"
                         pnl_ratio = (mid_px - entry_px) / entry_px if direction == "LONG" else (entry_px - mid_px) / entry_px
-                        meta = open_trade_meta.get(coin, {})
+                        meta = open_trade_meta.setdefault(coin, {})
+                        if "ts_open" not in meta:
+                            meta["ts_open"] = now - INVALIDATION_EXIT_MIN_AGE_SEC - 1 if INVALIDATION_ASSUME_OLD_ON_RESTART else now
                         trade_age = now - meta.get("ts_open", now)
                         profit_usd_live = max(0.0, (mid_px - entry_px if direction == "LONG" else entry_px - mid_px) * abs(szi))
 
-                        # ── 1. EARLY CUT disabilitato in modalità NO_SL ──
-                        # Non chiude automaticamente in perdita: l'uscita resta manuale/TP/smart TP.
+                        # ── 1. Nessuno SL exchange: solo invalidazione gestita dal bot ──
+                        if INVALIDATION_EXIT_ENABLED and trade_age >= INVALIDATION_EXIT_MIN_AGE_SEC and pnl_ratio <= INVALIDATION_EXIT_MAX_LOSS_PCT:
+                            try:
+                                actual_size = round_to_decimals(abs(szi), sz_decimals.get(coin, 4))
+                                close_px = round_to_decimals(mid_px * (INVALIDATION_CLOSE_PRICE_LONG_MULT if direction == "LONG" else INVALIDATION_CLOSE_PRICE_SHORT_MULT), px_decimals.get(coin, 4))
+                                call(_exchange.order, str(coin), direction != "LONG",
+                                     actual_size, close_px,
+                                     {"limit": {"tif": "Ioc"}}, True, timeout=10)
+                                delete_signal(coin)
+                                log_exec(f"[{coin}] ⏱ INVALIDAZIONE: age {trade_age/3600:.1f}h pnl {pnl_ratio:.2%} — chiusura IOC, nessuno SL exchange")
+                                tg(f"⏱ <b>{coin}</b> invalidato {pnl_ratio:.2%} dopo {trade_age/3600:.1f}h — chiusura IOC, nessuno SL", silent=True)
+                            except Exception as e:
+                                log_err(f"[{coin}] invalidation exit: {e}")
+                            continue
 
                         # ── 2. SMART TP: in profitto >0.2% → prendi profitto ──
                         if pnl_ratio > ALT_SMART_TP_MIN_PNL_PCT and trade_age > ALT_SMART_TP_MIN_AGE_SEC and profit_usd_live >= TARGET_PROFIT_USD:
@@ -7046,7 +7259,7 @@ def executor_thread_alt():
                                     close_px = round_to_decimals(mid_px * (ALT_CLOSE_LONG_MULT if direction == "LONG" else ALT_CLOSE_SHORT_MULT), px_decimals.get(coin, 4))
                                     call(_exchange.order, str(coin), direction != "LONG",
                                          actual_size, close_px,
-                                         {"limit": {"tif": "Ioc"}}, False, timeout=10)
+                                         {"limit": {"tif": "Ioc"}}, True, timeout=10)
                                     delete_signal(coin)
                                     tg(f"💰 <b>{coin}</b> TP +{pnl_ratio:.2%} (${profit_usd_live:.2f})", silent=True)
                             except Exception as e:
@@ -7129,9 +7342,12 @@ def executor_thread_alt():
                 direction = sig.get("direction", "")
                 pf = float(sig.get("profit_factor", 0) or 0)
                 wr = float(sig.get("win_rate", 0) or 0)
+                entry_profile = sig.get("entry_profile", {}) or {}
+                pf_min_exec = float(entry_profile.get("pf_min", STRICT_MIN_PROFIT_FACTOR))
+                wr_min_exec = float(entry_profile.get("wr_min", STRICT_MIN_WIN_RATE))
 
-                # Hard filter: PF > 1.2 E WR > 45% — senza edge reale non tradare
-                if pf < 1.2 or wr < 0.40:
+                # Hard filter: senza SL exchange entra solo con edge reale.
+                if pf < pf_min_exec or wr < wr_min_exec:
                     continue
 
                 if direction == "LONG"  and score >= SETUP_SCORE_MIN:
