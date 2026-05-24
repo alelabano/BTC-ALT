@@ -5635,56 +5635,57 @@ def run_processor():
                   f"rank:{sig['rank_score']:.3f} PF:{sig['pf']:.2f} WR:{sig['wr']:.1%} "
                   f"AI:{sig['ai_score']}/10 setup:{sig['setup_score']}/100")
 
-        # Pubblica il migliore
-        best = valid_signals[0]
-        coin_best = best["coin"]
-
-        signal_data = {
-            "score":           best["setup_score"],
-            "sl":              best["sl"],
-            "tp":              best["tp"],
-            "sl_dist":         best["sl_dist"],
-            "trailing_stop":   best["trailing_stop"],
-            "direction":       best["direction"],
-            "signal_px":       best["px"],
-            "funding_z":       round(best["funding_z"], 3),
-            "confluence":      best["confluence"],
-            "win_rate":        best["wr"],
-            "profit_factor":   best["pf"],
-            "win_rate_recent": 0,
-            "signal_max_age":  BTC_SIGNAL_MAX_AGE if best["is_btc_eth"] else SIGNAL_MAX_AGE,
-            "mode":            best["mode"],
-            "scalp_mode":      best["scalp_mode"],
-            "strategy":        best["strategy"],
-            "regime":          best["regime"],
-            "ai_score":        best["ai_score"],
-            "setup_score":     best["setup_score"],
-            "rsi":             round(best["rsi"], 1),
-            "bb_pos":          round(best["bb_pos"], 3),
-            "bear_pump":       False,
-            "range_pump":      False,
-            "signal_type":     best["signal_type"],
-            "rank_score":      best["rank_score"],
-            "entry_profile":    best.get("entry_profile", {}),
-            "ts":              int(time.time())
-        }
-        publish_signal(coin_best, signal_data)
-        set_cooldown(coin_best, strategy=best["strategy"])
-
-        log_alt(f"🏆 BEST SIGNAL: {coin_best} [{best['direction']}] [{best['signal_type']}] [{best['mode']}] "
-              f"rank:{best['rank_score']:.3f} PF:{best['pf']:.2f} AI:{best['ai_score']}/10 "
-              f"SL:{best['sl']} TP:{best['tp']}")
-        # Salva metadati per la notifica post-fill
-        signal_data["_tg_meta"] = {
-            "signal_type": best["signal_type"], "mode": best["mode"],
-            "scalp_mode":  best["scalp_mode"],  "rank_score": best["rank_score"],
-            "setup_score": best["setup_score"], "ai_score":   best["ai_score"],
-            "ai_reason":   best["ai_reason"],   "pf":         best["pf"],
-            "wr":          best["wr"],           "regime":     best["regime"],
-            "rsi":         best["rsi"],          "bb_pos":     best["bb_pos"],
-            "vol_rel":     best["vol_rel"],      "funding_z":  best["funding_z"],
-        }
-        sent = 1
+        # Pubblica TUTTI i segnali validi in ordine di rank
+        # L'executor li gestisce fino a riempire gli slot liberi
+        sent = 0
+        for best in valid_signals:
+            coin_best = best["coin"]
+            signal_data = {
+                "score":           best["setup_score"],
+                "sl":              best["sl"],
+                "tp":              best["tp"],
+                "sl_dist":         best["sl_dist"],
+                "trailing_stop":   best["trailing_stop"],
+                "direction":       best["direction"],
+                "signal_px":       best["px"],
+                "funding_z":       round(best["funding_z"], 3),
+                "confluence":      best["confluence"],
+                "win_rate":        best["wr"],
+                "profit_factor":   best["pf"],
+                "win_rate_recent": 0,
+                "signal_max_age":  BTC_SIGNAL_MAX_AGE if best["is_btc_eth"] else SIGNAL_MAX_AGE,
+                "mode":            best["mode"],
+                "scalp_mode":      best["scalp_mode"],
+                "strategy":        best["strategy"],
+                "regime":          best["regime"],
+                "ai_score":        best["ai_score"],
+                "setup_score":     best["setup_score"],
+                "rsi":             round(best["rsi"], 1),
+                "bb_pos":          round(best["bb_pos"], 3),
+                "bear_pump":       False,
+                "range_pump":      False,
+                "signal_type":     best["signal_type"],
+                "rank_score":      best["rank_score"],
+                "entry_profile":   best.get("entry_profile", {}),
+                "ml_size_mult":    best.get("ml_size_mult", 1.0),
+                "ml_alt_features": best.get("ml_alt_features", []),
+                "ts":              int(time.time())
+            }
+            signal_data["_tg_meta"] = {
+                "signal_type": best["signal_type"], "mode": best["mode"],
+                "scalp_mode":  best["scalp_mode"],  "rank_score": best["rank_score"],
+                "setup_score": best["setup_score"], "ai_score":   best["ai_score"],
+                "ai_reason":   best["ai_reason"],   "pf":         best["pf"],
+                "wr":          best["wr"],           "regime":     best["regime"],
+                "rsi":         best["rsi"],          "bb_pos":     best["bb_pos"],
+                "vol_rel":     best["vol_rel"],      "funding_z":  best["funding_z"],
+            }
+            publish_signal(coin_best, signal_data)
+            set_cooldown(coin_best, strategy=best["strategy"])
+            rank_label = "🏆" if sent == 0 else f"  #{sent+1}"
+            log_alt(f"{rank_label} SIGNAL: {coin_best} [{best['direction']}] [{best['signal_type']}] "
+                  f"rank:{best['rank_score']:.3f} PF:{best['pf']:.2f} AI:{best['ai_score']}/10")
+            sent += 1
     else:
         log_alt("Nessun segnale valido questo ciclo")
 
