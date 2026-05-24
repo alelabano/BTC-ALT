@@ -5398,7 +5398,8 @@ def run_processor():
                     clear_candidate(coin)
                     continue
 
-                pf_full = bt["profit_factor"]
+                pf_full   = bt["profit_factor"]
+                pf_recent = bt["profit_factor_recent"]
                 cycle_wr_samples.append(pf_full)
                 entry_profile = build_adaptive_entry_profile(coin, regime, strategy, bt=bt, vol_rel=vol_rel)
 
@@ -5406,6 +5407,13 @@ def run_processor():
                     dynamic_threshold = max(entry_profile["pf_min"], float(np.median(cycle_wr_samples)) - 0.1)
                 else:
                     dynamic_threshold = entry_profile["pf_min"]
+
+                # Se PF recente è migliore del PF storico → strategia in miglioramento
+                # nel regime attuale → abbassa la soglia del 10%
+                n_recent = bt.get("n_trades_recent", 0)
+                if n_recent >= 10 and pf_recent > pf_full * 1.05:
+                    dynamic_threshold *= 0.90
+                    log_alt(f"[{coin}] 📈 PF trending up ({pf_full:.2f}→{pf_recent:.2f}) → soglia abbassata a {dynamic_threshold:.2f}")
 
                 if pf_full < dynamic_threshold:
                     log_alt(f"[{coin}] ❌ Edge PF:{pf_full:.2f} < {dynamic_threshold:.2f} — no edge")
