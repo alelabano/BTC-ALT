@@ -147,7 +147,7 @@ MIN_NOTIONAL_USD = 10.0          # Hyperliquid minimo assoluto
 BASE_MARGIN_USD = 1.0            # Margine base per trade ($1)
 LEVERAGE_OPTIONS = [5, 10, 15]
 BTC_BASE_MARGIN = 1.0
-ALT_MARGIN_PCT = 0.001
+ALT_MARGIN_PCT = 0.005
 _optimal_leverage_cache = {"btc": {"lev": 10, "ts": 0, "reasoning": ""}, "alt": {}}
 LEV_CACHE_TTL = 600
 TARGET_PROFIT_USD = float(os.getenv("TARGET_PROFIT_USD", "0.08"))
@@ -1869,7 +1869,7 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     else:
         if capital_usd is None:
             capital_usd = get_balance()
-        margin_base = max(BASE_MARGIN_USD / 1, capital_usd * ALT_MARGIN_PCT)
+        margin_base = max(0.5, capital_usd * ALT_MARGIN_PCT)
 
     # Applica size_mult sul margine (prima di tutto il resto)
     margin_used = margin_base * size_mult
@@ -5602,23 +5602,10 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     
     # ── IMPOSTA LEVA ──
     try:
-        lev_ok = False
-        for _lev_attempt in range(3):
-            try:
-                call(_exchange.update_leverage, selected_leverage, str(coin), is_cross=False, timeout=10)
-                lev_ok = True
-                log_exec(f"[{coin}] Leva impostata: {selected_leverage}x isolated | {lev_analysis['reasoning']}")
-                break
-            except Exception as e:
-                if "429" in str(e) and _lev_attempt < 2:
-                    time.sleep(3 * (_lev_attempt + 1))
-                else:
-                    log_err(f"[{coin}] Impostazione leva isolated fallita: {e} — trade annullato")
-                    return False
-        if not lev_ok:
-            return False
+        call(_exchange.update_leverage, selected_leverage, str(coin), is_cross=False, timeout=10)
+        log_exec(f"[{coin}] Leva impostata: {selected_leverage}x | {lev_analysis['reasoning']}")
     except Exception as e:
-        log_err(f"[{coin}] Leva setup error: {e} — trade annullato")
+        log_err(f"[{coin}] Impostazione leva isolated fallita: {e} — trade annullato")
         return False
     
     # ── CALCOLA SIZE CON LEVA DINAMICA ──
@@ -5829,9 +5816,8 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         # Step 1: GTC Maker (skip in FLASH)
         if scalp_mode != "FLASH":
             try:
-                tick = 10 ** (-effective_px_dec) if effective_px_dec > 0 else 1
                 gtc_px = round_to_decimals(
-                    entry_px - tick if is_buy else entry_px + tick,
+                    entry_px * (1 + SLIPPAGE) if is_buy else entry_px * (1 - SLIPPAGE),
                     effective_px_dec)
                 res = call(_exchange.order, str(coin), is_buy, size_nominal, gtc_px,
                            {"limit": {"tif": "Gtc"}}, False,
@@ -7077,35 +7063,6 @@ def executor_thread_alt():
 # UNIFIED MAIN — 4 Thread Architecture
 # ================================================================
 
-
-def set_all_isolated():
-    """Imposta margin isolated su tutte le coin al boot."""
-    log("MAIN", "🔒 Impostazione isolated su tutte le coin...")
-    try:
-        ctx = call(_info.meta_and_asset_ctxs, timeout=30)
-        if not ctx:
-            log("MAIN", "⚠️ set_all_isolated: impossibile recuperare universe")
-            return
-        coins = [a["name"] for a in ctx[0]["universe"]]
-    except Exception as e:
-        log("MAIN", f"⚠️ set_all_isolated error: {e}")
-        return
-    ok = 0; fail = 0
-    for coin in coins:
-        for attempt in range(3):
-            try:
-                call(_exchange.update_leverage, 1, coin, is_cross=False, timeout=8)
-                ok += 1
-                break
-            except Exception as e:
-                if "429" in str(e) and attempt < 2:
-                    time.sleep(2 * (attempt + 1))
-                else:
-                    fail += 1
-                    break
-        time.sleep(0.05)
-    log("MAIN", f"🔒 Isolated: {ok} OK, {fail} fail su {len(coins)} coin")
-
 def main():
     log("MAIN", "🚀 UNIFIED BOT — BTC Scalper V7 + Altcoin Processor")
     log("MAIN", f"BTC: Margin ${BTC_MARGIN_USD} Lev:{BTC_LEVERAGE}x (notional max(${MIN_NOTIONAL_USD:.0f}, ${BTC_MARGIN_USD}×lev)) | ALT: Margin ${ALT_TRADE_SIZE_USD} Lev:{ALT_LEVERAGE}x")
@@ -7121,9 +7078,6 @@ def main():
     # Load persisted state
     load_state()
     load_state_from_redis()
-
-    # Imposta isolated su tutte le coin al boot
-    set_all_isolated()
     ml_load_model()
     ml_load_model_alt()
 
