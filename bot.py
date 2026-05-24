@@ -1899,6 +1899,11 @@ def update_regime():
     low_vol = atr < atr_mean * 0.8  if atr_mean > 0 else False
     high_vol = atr > atr_mean * 1.2 if atr_mean > 0 else False
 
+    # ADX slope: media ultime 3 candele vs valore attuale
+    adx_series = df['adx'].astype(float)
+    adx_prev   = float(adx_series.iloc[-4:-1].mean()) if len(adx_series) >= 4 else adx
+    adx_slope  = adx - adx_prev  # positivo = ADX sale, negativo = ADX scende
+
     if adx < 18 and low_vol:
         _btc_regime = "RANGE_LOW_VOL"
     elif adx < 22:
@@ -1908,8 +1913,13 @@ def update_regime():
     else:
         _btc_regime = "TREND"
 
+    # Degrada TREND → RANGE se ADX è in calo significativo (trend che muore)
+    if _btc_regime in ("TREND", "TREND_STRONG") and adx_slope < -2:
+        log_btc(f"⚠️ ADX slope {adx_slope:+.1f} — trend in indebolimento → degrado a RANGE")
+        _btc_regime = "RANGE"
+
     _btc_regime_ts = time.time()
-    log_btc(f"Regime: {_btc_regime} (ADX:{adx:.0f} ATR:{atr:.0f} mean:{atr_mean:.0f} "
+    log_btc(f"Regime: {_btc_regime} (ADX:{adx:.0f} slope:{adx_slope:+.1f} ATR:{atr:.0f} mean:{atr_mean:.0f} "
             f"{'LOW_VOL' if low_vol else 'HIGH_VOL' if high_vol else 'NORMAL'})")
     return _btc_regime
 
@@ -2080,9 +2090,7 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     elif coin == "BTC":
         margin_base = BTC_BASE_MARGIN
     else:
-        if capital_usd is None:
-            capital_usd = get_balance()
-        margin_base = ALT_TRADE_SIZE_USD
+        margin_base = ALT_TRADE_SIZE_USD  # fisso: no reinvestimento utili
 
     # Applica size_mult sul margine (prima di tutto il resto)
     margin_used = margin_base * size_mult
@@ -2604,6 +2612,27 @@ def check_signal():
     details = ""
     size_mult = 1.0
 
+    # ── SLOPE INDICATORS: variazioni, non solo valori assoluti ──
+    # ADX slope su 1h (ultime 3 candele vs corrente)
+    adx1h_series = df_1h['adx'].astype(float)
+    adx1h_prev   = float(adx1h_series.iloc[-4:-1].mean()) if len(adx1h_series) >= 4 else adx1h
+    adx1h_slope  = adx1h - adx1h_prev  # positivo = trend nascente, negativo = trend che muore
+
+    # ADX slope su 15m
+    adx15_series = df_15m['adx'].astype(float)
+    adx15_prev   = float(adx15_series.iloc[-4:-1].mean()) if len(adx15_series) >= 4 else adx15
+    adx15_slope  = adx15 - adx15_prev
+
+    # RSI slope su 15m
+    rsi15_series = df_15m['rsi'].astype(float)
+    rsi15_prev   = float(rsi15_series.iloc[-4:-1].mean()) if len(rsi15_series) >= 4 else rsi5
+    rsi15_slope  = rsi5 - rsi15_prev  # positivo = RSI sale, negativo = scende
+
+    # MACD acceleration su 15m (seconda derivata del momentum)
+    macd15_series = df_15m['macd_hist'].astype(float)
+    macd15_prev2  = float(macd15_series.iloc[-3]) if len(macd15_series) >= 3 else macd5_prev
+    macd15_accel  = (macd5 - macd5_prev) - (macd5_prev - macd15_prev2)
+
     # RANGE_LOW_VOL blocca, ma non se c'è un vero spike di volume (vol_rel > 2)
     if regime == "RANGE_LOW_VOL" and vol5 < 2.0:
         return None
@@ -2684,6 +2713,30 @@ def check_signal():
     ml_features = []
     details += f" sent:{sent}"
     log_btc(f"[SIGNAL] {direction} {sig_type} | {details}")
+
+    # ── FILTRO SLOPE: variazioni indicatori, non solo valori assoluti ──
+    # ADX 1h in calo = trend che muore → blocca trend-following
+    if sig_type not in ("RANGE_REV",) and adx1h_slope < -2 and adx1h < 28:
+        log_btc(f"\u274c ADX 1h slope {adx1h_slope:+.1f} — trend indebolito, skip {direction}")
+        return None
+
+    # RSI 15m contro il trade = momentum assente
+    if direction == "LONG" and rsi15_slope < -5 and rsi5 < 55:
+        log_btc(f"\u274c RSI 15m slope {rsi15_slope:+.1f} contro LONG (RSI:{rsi5:.0f}) — skip")
+        return None
+    if direction == "SHORT" and rsi15_slope > 5 and rsi5 > 45:
+        log_btc(f"\u274c RSI 15m slope {rsi15_slope:+.1f} contro SHORT (RSI:{rsi5:.0f}) — skip")
+        return None
+
+    # MACD decelera contro il trade = momentum esaurito
+    if direction == "LONG" and macd15_accel < -0.5 and macd5 < 0:
+        log_btc(f"\u274c MACD accel {macd15_accel:+.2f} — momentum LONG esaurito, skip")
+        return None
+    if direction == "SHORT" and macd15_accel > 0.5 and macd5 > 0:
+        log_btc(f"\u274c MACD accel {macd15_accel:+.2f} — momentum SHORT esaurito, skip")
+        return None
+
+    log_btc(f"[SLOPE] ADX1h:{adx1h_slope:+.1f} ADX15m:{adx15_slope:+.1f} RSI15m:{rsi15_slope:+.1f} MACDaccel:{macd15_accel:+.2f}")
 
     # ── EXPECTATION ──
     trend_dir = "UP" if ema9_1h > ema21_1h else "DOWN"
