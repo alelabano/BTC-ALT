@@ -6015,7 +6015,8 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     # ── CALCOLA SIZE CON LEVA DINAMICA ──
     size, margin_used, notional, _ = calculate_trade_size(
         float(mids.get(coin, 0)), 
-        selected_leverage, 
+        selected_leverage,
+        margin_usd=TRADE_SIZE_USD,
         coin=coin, 
         capital_usd=balance
     )
