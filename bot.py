@@ -144,7 +144,7 @@ SCANNER_INTERVAL = 2 * 60; SCANNER_MAX_UNIVERSE = 229
 PROCESSOR_MAX_COINS = 30
 CORRELATION_THRESHOLD = 0.55
 MIN_NOTIONAL_USD = 10.0          # Hyperliquid minimo assoluto
-BASE_MARGIN_USD = 1.0            # Margine base per trade ($1)
+BASE_MARGIN_USD = 1.2            # Margine base per trade ($1)
 LEVERAGE_OPTIONS = [5, 10, 15]
 BTC_BASE_MARGIN = 1.0
 ALT_MARGIN_PCT = 0.001
