@@ -229,9 +229,9 @@ LEV_VOL_BONUS_MED_THRESHOLD = 1.5
 LEV_VOL_BONUS_MIN_THRESHOLD = 0.5
 LEV_SCORE_AGGRESSIVE = 0.75
 LEV_SCORE_NORMAL = 0.40
-LEV_LOW = 5
-LEV_NORMAL = 10
-LEV_HIGH = 15
+LEV_LOW = 10
+LEV_NORMAL = 15
+LEV_HIGH = 20
 LEV_VOL_SCORE_WEIGHT = 0.40
 LEV_TREND_SCORE_WEIGHT = 0.35
 LEV_VOLUME_SCORE_WEIGHT = 0.15
@@ -335,10 +335,10 @@ STRICT_MIN_RECENT_PROFIT_FACTOR = 1.05
 STRICT_RECENT_MIN_TRADES = 10
 STRICT_MIN_AI_SCORE = 5
 STRICT_REQUIRE_AI_VALID = True
-INVALIDATION_EXIT_ENABLED = True
-INVALIDATION_ASSUME_OLD_ON_RESTART = True
+INVALIDATION_EXIT_ENABLED = False
+INVALIDATION_ASSUME_OLD_ON_RESTART = False
 INVALIDATION_EXIT_MIN_AGE_SEC = 6 * 60 * 60
-INVALIDATION_EXIT_MAX_LOSS_PCT = -0.018
+INVALIDATION_EXIT_MAX_LOSS_PCT = -0.9
 INVALIDATION_CLOSE_PRICE_LONG_MULT = 0.999
 INVALIDATION_CLOSE_PRICE_SHORT_MULT = 1.001
 
@@ -6015,7 +6015,8 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     # ── CALCOLA SIZE CON LEVA DINAMICA ──
     size, margin_used, notional, _ = calculate_trade_size(
         float(mids.get(coin, 0)), 
-        selected_leverage, 
+        selected_leverage,
+        margin_usd=TRADE_SIZE_USD,
         coin=coin, 
         capital_usd=balance
     )
@@ -7823,4 +7824,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"FATAL: {e}", flush=True)
         import traceback; traceback.print_exc()
-        time.sleep(60). verifica codice, dovrebbe aprire trade size fissa 1,2$ e adattare la leva per minimo notional 10$
+        time.sleep(60)
