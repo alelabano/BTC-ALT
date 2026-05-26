@@ -1152,6 +1152,19 @@ def get_flow_signal():
 
     return {"bias": bias, "confidence": confidence, "details": details}
 
+def get_cvd(coin: str) -> float:
+    """Cumulative Volume Delta approssimato da candele 5m."""
+    try:
+        df = fetch_df(coin, "5m", 1)
+        if df is None or len(df) < 10:
+            return 0.0
+        
+        # CVD = sum(volume * (close - open) / (high - low) * direction)
+        df['cvd_delta'] = df['volume'] * (df['close'] - df['open']) / (df['high'] - df['low'] + 1e-10)
+        cvd = df['cvd_delta'].iloc[-5:].sum()
+        return float(cvd)
+    except:
+        return 0.0
 
 # ================================================================
 # MODULE 3: MACHINE LEARNING — Online Signal Quality Predictor
@@ -5350,6 +5363,42 @@ def run_processor():
                 signal_type   = short_type
             else:
                 continue
+
+                # ── FILTRO DECELERAZIONE RSI ─────────────────────────────────
+            if len(df_5m) >= 3:
+                rsi_prev = df_5m['rsi'].iloc[-2]
+                rsi_prev2 = df_5m['rsi'].iloc[-3]
+                rsi_accel = abs(rsi - rsi_prev) - abs(rsi_prev - rsi_prev2)
+                
+                if direction == "LONG" and rsi_accel < 0:
+                    log_alt(f"[{coin}] SKIP: RSI decelera (accel:{rsi_accel:.1f})")
+                    continue
+                if direction == "SHORT" and rsi_accel < 0:
+                    log_alt(f"[{coin}] SKIP: RSI decelera (accel:{rsi_accel:.1f})")
+                    continue
+            
+            # ── FILTRO CVD E ORDER BOOK ──────────────────────────────────
+            # Calcola CVD e Order Book imbalance per la direzione
+            try:
+                cvd = get_cvd(coin)
+                ob = fetch_liquidity_data(coin, px)
+    
+                if direction == "LONG":
+                    if cvd < 0:
+                        log_alt(f"[{coin}] SKIP: CVD negativo ({cvd:.0f}) contro LONG")
+                        continue
+                    if ob.get("imbalance", 0.5) < 0.55:
+                        log_alt(f"[{coin}] SKIP: OB imbalance {ob.get('imbalance',0.5):.2f} < 0.55")
+                        continue
+                else:  # SHORT
+                    if cvd > 0:
+                        log_alt(f"[{coin}] SKIP: CVD positivo ({cvd:.0f}) contro SHORT")
+                        continue
+                    if ob.get("imbalance", 0.5) > 0.45:
+                        log_alt(f"[{coin}] SKIP: OB imbalance {ob.get('imbalance',0.5):.2f} > 0.45")
+                        continue
+            except Exception as e:
+                log_alt(f"[{coin}] CVD/OB filtro error: {e}")
 
             # ── FILTRO SLOPE 1h: blocca controtendenza forte ─────────
             if direction == "SHORT" and slope_4h > PROCESSOR_SLOPE_4H_BLOCK:
