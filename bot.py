@@ -147,7 +147,7 @@ MIN_NOTIONAL_USD = 10.0          # Hyperliquid minimo assoluto
 BASE_MARGIN_USD = 1.0            # Margine base per trade ($1)
 LEVERAGE_OPTIONS = [5, 10, 15]
 BTC_BASE_MARGIN = 1.0
-ALT_MARGIN_PCT = 0.001
+ALT_MARGIN_PCT = 0.005
 _optimal_leverage_cache = {"btc": {"lev": 10, "ts": 0, "reasoning": ""}, "alt": {}}
 LEV_CACHE_TTL = 600
 TARGET_PROFIT_USD = float(os.getenv("TARGET_PROFIT_USD", "0.08"))
@@ -2082,7 +2082,7 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     else:
         if capital_usd is None:
             capital_usd = get_balance()
-        margin_base = max(BASE_MARGIN_USD / 1, capital_usd * ALT_MARGIN_PCT)
+        margin_base = max(BASE_MARGIN_USD / 2, capital_usd * ALT_MARGIN_PCT)
 
     # Applica size_mult sul margine (prima di tutto il resto)
     margin_used = margin_base * size_mult
