@@ -155,7 +155,7 @@ TARGET_PROFIT_FEE_PCT = float(os.getenv("TARGET_PROFIT_FEE_PCT", "0.001"))  # bu
 
 # ── Parametri operativi centralizzati ────────────────────────────
 # Modifica qui: il codice sotto deve leggere queste soglie, non numeri sparsi.
-LEVERAGE_MIN = 1
+LEVERAGE_MIN = 3
 ALT_MAX_LEVERAGE = 20
 SIZE_MULT_MIN = 0.01
 PRICE_ROUND_MAX_DECIMALS = 10
