@@ -1914,7 +1914,10 @@ def update_regime():
     return _btc_regime
 
 # ================================================================
-# DYNAMIC LEVERAGE SELECTION (Market-Adaptive)
+import math
+
+# ================================================================
+# DYNAMIC LEVERAGE SELECTION (Market-Adaptive) - OPTIMIZED
 # ================================================================
 
 def analyze_market_for_leverage(coin: str = "BTC") -> dict:
@@ -1922,26 +1925,15 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
     Pipeline in 3 step:
       1. ANALISI MERCATO  — volatilità (ATR%), trend (ADX), volume (vol_rel), spread
       2. DETERMINA LEVA   — regole hard priority + score composito → 5x | 10x | 15x
-      3. (caller)         — CALCOLA SIZE = max($10, margin × leva) / prezzo
-
-    Regole hard (priority order, applicate prima dello score):
-      • volatilità HIGH  (ATR% > 1.5%)       → forza 5x
-      • spread POOR      (spread > 0.2%)      → forza 5x
-      • funding estremo  (|z| > 2.0)          → forza 5x
-      • volume spike     (vol_rel > LEV_VOL_SPIKE) AND
-        volatilità LOW   (ATR% < 0.8%)        → forza 15x
-      • trend STRONG     (ADX > 35) AND
-        volatilità LOW                         → forza 15x
-
-    Score composito (solo se nessuna regola hard si attiva):
-      • volatilità:  HIGH→0 | MEDIUM→0.5 | LOW→1.0
-      • trend:       RANGING→0 | WEAK→0.3 | MODERATE→0.7 | STRONG→1.0
-      • volume:      <0.5→-0.2 | 0.5-1.5→0 | >1.5→+0.3 | >2.5→+0.5
-      • liquidità:   POOR→-0.5 | FAIR→0 | EXCELLENT→+0.3
-      Soglie:  score < 0.4 → 5x | 0.4-0.75 → 10x | > 0.75 → 15x
+      3. (caller)         — CALCOLA SIZE
     """
-    _default = {"recommended_leverage": LEV_DEFAULT, "reasoning": "default (dati insufficienti)",
-                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": LEV_LIQUIDITY_DEFAULT_SCORE}
+    _default = {
+        "recommended_leverage": LEV_DEFAULT, 
+        "reasoning": "default (dati insufficienti)",
+        "market_volatility": "MEDIUM", 
+        "trend_strength": "MODERATE", 
+        "liquidity_score": LEV_LIQUIDITY_DEFAULT_SCORE
+    }
     try:
         df_15m = fetch_df(coin, "15m", LEV_LOOKBACK_DAYS)
         if df_15m is None or len(df_15m) < LEV_MIN_CANDLES:
@@ -1953,7 +1945,7 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
         atr_pct = atr / px if px > 0 else 0
 
         # ── STEP 1: ANALISI MERCATO ──────────────────────────────────
-
+        
         # Volatilità
         if atr_pct > LEV_ATR_HIGH_PCT:
             vol_level = "HIGH"
@@ -1976,21 +1968,21 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
         # Volume
         vol_rel = float(r.get('vol_rel', 1.0))
 
-        # Spread / liquidità
+        # Spread / liquidità (Assicurarsi che spread_real sia in formato decimale/percentuale, es: 0.001 per 0.1%)
         try:
-            liq    = fetch_liquidity_data(coin, px) if coin != "BTC" else fetch_liquidity()
+            liq = fetch_liquidity_data(coin, px) if coin != "BTC" else fetch_liquidity()
             spread = liq.get("spread_real", LEV_SPREAD_FAIR) if liq else LEV_SPREAD_FAIR
         except Exception:
             spread = LEV_SPREAD_FAIR
 
         if spread > LEV_SPREAD_POOR:
-            liq_level     = "POOR"
+            liq_level       = "POOR"
             liquidity_score = 0.0
         elif spread > LEV_SPREAD_FAIR:
-            liq_level     = "FAIR"
+            liq_level       = "FAIR"
             liquidity_score = LEV_LIQUIDITY_FALLBACK_SCORE
         else:
-            liq_level     = "EXCELLENT"
+            liq_level       = "EXCELLENT"
             liquidity_score = 1.0
 
         # Funding
@@ -2001,10 +1993,10 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
 
         # ── STEP 2: DETERMINA LEVA ───────────────────────────────────
 
-        # — Regole hard (in ordine di priorità decrescente) —
         hard_reason = ""
         best_lev    = 0   # 0 = nessuna regola hard attivata
 
+        # Controllo Regole Hard (Priorità decrescente)
         if vol_level == "HIGH":
             best_lev    = LEV_LOW
             hard_reason = f"volatilità ALTA (ATR {atr_pct:.2%})"
@@ -2021,14 +2013,18 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
             best_lev    = LEV_HIGH
             hard_reason = f"trend STRONG (ADX {adx:.0f}) + bassa volatilità"
 
-        # — Score composito (solo se nessuna regola hard) —
+        # Score composito (solo se nessuna regola hard)
         if best_lev == 0:
             vol_score   = {"LOW": 1.0, "MEDIUM": 0.5, "HIGH": 0.0}[vol_level]
             trend_score = {"RANGING": 0.0, "WEAK": 0.3, "MODERATE": 0.7, "STRONG": 1.0}[trend_level]
+            
             vol_bonus   = LEV_VOL_BONUS_HIGH if vol_rel > LEV_VOL_SPIKE else LEV_VOL_BONUS_MED if vol_rel > LEV_VOL_BONUS_MED_THRESHOLD else 0.0 if vol_rel >= LEV_VOL_BONUS_MIN_THRESHOLD else LEV_VOL_BONUS_LOW
             liq_bonus   = LEV_LIQ_BONUS_EXCELLENT if liq_level == "EXCELLENT" else 0.0 if liq_level == "FAIR" else LEV_LIQ_BONUS_POOR
 
-            score = vol_score * LEV_VOL_SCORE_WEIGHT + trend_score * LEV_TREND_SCORE_WEIGHT + vol_bonus * LEV_VOLUME_SCORE_WEIGHT + liq_bonus * LEV_LIQUIDITY_SCORE_WEIGHT
+            score = (vol_score * LEV_VOL_SCORE_WEIGHT + 
+                     trend_score * LEV_TREND_SCORE_WEIGHT + 
+                     vol_bonus * LEV_VOLUME_SCORE_WEIGHT + 
+                     liq_bonus * LEV_LIQUIDITY_SCORE_WEIGHT)
 
             if score > LEV_SCORE_AGGRESSIVE:
                 best_lev    = LEV_HIGH
@@ -2056,25 +2052,28 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
 
     except Exception as e:
         log_btc(f"[LEV] Errore analisi: {e} → fallback 10x")
-        return {"recommended_leverage": LEV_DEFAULT, "reasoning": f"fallback ({e})",
-                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": LEV_LIQUIDITY_FALLBACK_SCORE}
+        return {
+            "recommended_leverage": LEV_DEFAULT, 
+            "reasoning": f"fallback ({e})",
+            "market_volatility": "MEDIUM", 
+            "trend_strength": "MODERATE", 
+            "liquidity_score": LEV_LIQUIDITY_FALLBACK_SCORE
+        }
 
 
 def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = None,
                          coin: str = "BTC", capital_usd: float = None,
                          size_mult: float = 1.0) -> tuple:
     """
-    STEP 3 della pipeline leverage:
-        size = max($10, margin × leva) / prezzo
-
-    Il size_mult (da ML/AI) viene applicato sul MARGINE prima di tutto,
-    in modo che la formula rimanga coerente.
-
-    Returns: (size, margin_used, notional, sz_dec)
+    STEP 3: Calcola la size della posizione garantendo la conformità con il Notional Minimo.
+    Risolve le ridondanze di calcolo e previene sotto-dimensionamenti dovuti ad arrotondamento.
     """
+    if entry_px <= 0 or leverage <= 0:
+        return 0.0, 0.0, 0.0, 5
+
     sz_dec = _btc_coin_meta.get("sz_dec", 5) if coin == "BTC" else 5
 
-    # Determina margine base
+    # 1. Determina il margine base
     if margin_usd is not None:
         margin_base = margin_usd
     elif coin == "BTC":
@@ -2082,39 +2081,42 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     else:
         if capital_usd is None:
             capital_usd = get_balance()
-        margin_base = max(BASE_MARGIN_USD / 1, capital_usd * ALT_MARGIN_PCT)
+        margin_base = max(BASE_MARGIN_USD, capital_usd * ALT_MARGIN_PCT)
 
-    # Applica size_mult sul margine (prima di tutto il resto)
+    # 2. Applica il moltiplicatore sul margine
     margin_used = margin_base * size_mult
+    
+    # 3. Calcolo del Notional Teorico e della Size nominale
+    notional_teorico = margin_used * leverage
+    notional_target = max(MIN_NOTIONAL_USD, notional_teorico)
+    
+    raw_size = notional_target / entry_px
+    size = round_to_decimals(raw_size, sz_dec)
 
-    # Formula canonica: notional = max($10, margin × leva)
-    notional = max(MIN_NOTIONAL_USD, margin_used * leverage)
-
-    # Se il floor $10 ha alzato il notional, adegua il margine di conseguenza
-    if notional > margin_used * leverage:
-        margin_used = notional / leverage
-
-    # Size in coin
-    size = notional / entry_px if entry_px > 0 else 0
-    size = round_to_decimals(size, sz_dec)
-
-    # Verifica finale (arrotondamento può abbassare di poco)
+    # 4. Controllo post-arrotondamento (Se arrotondando per difetto scendiamo sotto il minimo consentito)
     final_notional = size * entry_px
     if final_notional < MIN_NOTIONAL_USD - FINAL_NOTIONAL_TOLERANCE_USD:
+        # Forza arrotondamento per eccesso per non violare i vincoli dell'exchange
         min_size = MIN_NOTIONAL_USD / entry_px
-        size = round_to_decimals(min_size, sz_dec)
+        size = round_to_decimals(min_size + (10 ** -sz_dec), sz_dec)
         final_notional = size * entry_px
-        margin_used = final_notional / leverage
+
+    # Reciproca precisione sul margine realmente impegnato sul conto
+    margin_used = final_notional / leverage
 
     log_btc(f"[SIZE] {coin} | lev:{leverage}x | margin:${margin_used:.2f} × mult:{size_mult:.2f} "
             f"| notional:${final_notional:.2f} | size:{size}")
 
     return size, margin_used, final_notional, sz_dec
 
+
 def tune_leverage_for_profit_target(coin: str, entry_px: float, tp_px: float,
                                     margin_usd: float, current_leverage: int,
                                     max_leverage: int, size_mult: float = 1.0) -> dict:
-    """Aumenta la leva solo se il TP scelto dagli indicatori non arriva al target USD."""
+    """
+    Aumenta la leva solo se il TP scelto dagli indicatori non è matematicamente
+    sufficiente a raggiungere il target monetario impostato (TARGET_PROFIT_USD).
+    """
     try:
         if TARGET_PROFIT_USD <= 0 or entry_px <= 0 or tp_px <= 0:
             return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": "target disabilitato"}
@@ -2124,25 +2126,30 @@ def tune_leverage_for_profit_target(coin: str, entry_px: float, tp_px: float,
             return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": "TP nullo"}
 
         net_tp_pct = tp_pct - TARGET_PROFIT_FEE_PCT
+        if net_tp_pct <= 0:
+            return {"leverage": int(max_leverage), "expected_profit": 0.0, "tp_pct": tp_pct, "reason": f"Fickle profit margin dopo commissioni su {tp_pct:.2%}"}
+
+        # Margine effettivo calibrato esattamente come farà calculate_trade_size
         margin_eff = max(SIZE_MULT_MIN, float(margin_usd) * max(SIZE_MULT_MIN, float(size_mult)))
         max_lev = max(LEVERAGE_MIN, int(max_leverage))
         base_lev = max(LEVERAGE_MIN, min(int(current_leverage), max_lev))
 
-        if net_tp_pct <= 0:
-            required_lev = max_lev
-        else:
-            required_notional = TARGET_PROFIT_USD / net_tp_pct
-            required_lev = max(LEVERAGE_MIN, int(math.ceil(required_notional / margin_eff)))
+        # Calcolo leva necessaria basata sul target monetario desiderato
+        required_notional = TARGET_PROFIT_USD / net_tp_pct
+        required_lev = max(LEVERAGE_MIN, int(math.ceil(required_notional / margin_eff)))
 
+        # Sceglie la leva ottimale senza scendere sotto la base generata dai filtri di mercato
         chosen_lev = min(max(base_lev, required_lev), max_lev)
+        
+        # Stima del profitto atteso reale
         notional = max(MIN_NOTIONAL_USD, margin_eff * chosen_lev)
-        expected_profit = notional * max(net_tp_pct, 0.0)
+        expected_profit = notional * net_tp_pct
 
         if expected_profit + 1e-9 < TARGET_PROFIT_USD:
-            reason = (f"target netto ${TARGET_PROFIT_USD:.2f} non pieno: max {chosen_lev}x "
+            reason = (f"target netto ${TARGET_PROFIT_USD:.2f} non raggiungibile: max consentito {chosen_lev}x "
                       f"=> ${expected_profit:.2f} stimati")
         elif chosen_lev > base_lev:
-            reason = (f"target netto ${TARGET_PROFIT_USD:.2f}: leva {base_lev}x→{chosen_lev}x "
+            reason = (f"target netto ${TARGET_PROFIT_USD:.2f}: incremento leva {base_lev}x→{chosen_lev}x "
                       f"su TP {tp_pct:.2%}")
         else:
             reason = f"target netto ${TARGET_PROFIT_USD:.2f} ok con {chosen_lev}x su TP {tp_pct:.2%}"
@@ -2156,7 +2163,6 @@ def tune_leverage_for_profit_target(coin: str, entry_px: float, tp_px: float,
         }
     except Exception as e:
         return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": f"target fallback ({e})"}
-# ================================================================
 # BACKTEST — testa i segnali esatti del bot su storico 5m
 # ================================================================
 _btc_bt_results = {}   # {"PULLBACK_LONG": {"pf":1.3, "wr":0.45, "n":80}, ...}
