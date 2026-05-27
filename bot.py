@@ -6134,7 +6134,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     if size_nominal <= 0:
         return False
 
-    if size_nominal * entry_px < MIN_NOTIONAL_USD:
+    if size_nominal * entry_px < MIN_NOTIONAL_USD - 0.05:
         log_err(f"[{coin}] Notional insufficiente ({size_nominal} × {entry_px:.4f} = {size_nominal * entry_px:.2f} < {MIN_NOTIONAL_USD})")
         return False
     log_exec(f"[{coin}] 💰 SIZE: margin=${TRADE_SIZE_USD * size_mult:.2f} × leva={selected_leverage}x → notional=${notional_target:.2f} → {size_nominal} | TP≈${target_info['expected_profit']:.2f}")
@@ -6188,8 +6188,9 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
                 ts_raw = entry_px - ts_dist_old * lev_scale if is_buy else entry_px + ts_dist_old * lev_scale
 
             # Ricalcola size con leva effettiva (mantiene floor MIN_NOTIONAL_USD)
-            notional_actual = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * size_mult * actual_lev)
+            notional_actual = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * actual_lev)
             size_nominal = round_to_decimals(notional_actual / entry_px, sz_dec)
+            size_nominal = round_to_decimals(size_nominal * size_mult, sz_dec)
             if size_nominal <= 0 or size_nominal * entry_px < MIN_NOTIONAL_USD:
                 log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: notional=${size_nominal * entry_px:.2f}")
                 return False
