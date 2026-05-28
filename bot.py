@@ -7521,8 +7521,8 @@ def set_all_isolated():
     for coin in coins:
         for attempt in range(3):
             try:
-                call(_exchange.update_leverage, 1, coin, is_cross=False, timeout=8)
-                ok += 1
+                call(_exchange.update_leverage, 10, coin, is_cross=False, timeout=8)
+                ok += 3
                 break
             except Exception as e:
                 if "429" in str(e) and attempt < 2:
