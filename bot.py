@@ -2081,7 +2081,7 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     else:
         if capital_usd is None:
             capital_usd = get_balance()
-        margin_base = min(capital_usd * 0.30, BASE_MARGIN_USD)
+        margin_base = BTC_BASE_MARGIN
 
     # 2. Applica il moltiplicatore sul margine
     margin_used = margin_base * size_mult
@@ -7521,7 +7521,7 @@ def set_all_isolated():
     for coin in coins:
         for attempt in range(3):
             try:
-                call(_exchange.update_leverage, 10, coin, is_cross=False, timeout=8)
+                call(_exchange.update_leverage, 1, coin, is_cross=False, timeout=8)
                 ok += 3
                 break
             except Exception as e:
