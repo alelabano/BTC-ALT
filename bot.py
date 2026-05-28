@@ -130,7 +130,7 @@ MOMENTUM_MULT_ALT = 1.2
 CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 
 # ── Unified Executor Config ─────────────────────────────────────
-ALT_MAX_CONCURRENT = 4         # max altcoin positions
+ALT_MAX_CONCURRENT = 9         # max altcoin positions
 ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
 ALT_CHECK_INTERVAL = 2
 ALT_SIGNAL_MAX_AGE = 3 * 60
