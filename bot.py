@@ -56,7 +56,7 @@ if not DEEPSEEK_API_KEY:
 
 # ── BTC Scalper Config ───────────────────────────────────────────
 BTC_COIN = "BTC"
-BTC_MARGIN_USD = 1.2       # margine per trade BTC — notional = BTC_MARGIN_USD × leva effettiva
+BTC_MARGIN_USD = 2.5       # margine per trade BTC — notional = BTC_MARGIN_USD × leva effettiva
 MIN_NOTIONAL_USD = 10.0    # Hyperliquid minimum $10 notional (shared BTC + ALT)
 BTC_MAX_POSITIONS = 6
 BTC_COOLDOWN_SEC = 180
@@ -131,7 +131,7 @@ CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 
 # ── Unified Executor Config ─────────────────────────────────────
 ALT_MAX_CONCURRENT = 9         # max altcoin positions
-ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
+ALT_TRADE_SIZE_USD = 2.5       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
 ALT_CHECK_INTERVAL = 2
 ALT_SIGNAL_MAX_AGE = 3 * 60
 SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
@@ -147,7 +147,7 @@ MIN_NOTIONAL_USD = 10.0          # Hyperliquid minimo assoluto
 BASE_MARGIN_USD = 1.2            # Margine base per trade ($1)
 LEVERAGE_OPTIONS = [5, 10, 15]
 BTC_BASE_MARGIN = 1.2
-ALT_MARGIN_PCT = 1
+ALT_MARGIN_PCT = 0.2
 _optimal_leverage_cache = {"btc": {"lev": 10, "ts": 0, "reasoning": ""}, "alt": {}}
 LEV_CACHE_TTL = 600
 TARGET_PROFIT_USD = float(os.getenv("TARGET_PROFIT_USD", "0.08"))
