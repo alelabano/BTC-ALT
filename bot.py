@@ -2081,7 +2081,7 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     else:
         if capital_usd is None:
             capital_usd = get_balance()
-        margin_base = BTC_BASE_MARGIN
+        margin_base = ALT_TRADE_SIZE_USD
 
     # 2. Applica il moltiplicatore sul margine
     margin_used = margin_base * size_mult
