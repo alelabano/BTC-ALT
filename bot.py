@@ -5989,6 +5989,10 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     if mid_px <= 0:
         log_err(f"[{coin}] Prezzo non disponibile")
         return False
+
+    LEVERAGE_CONFIG = {"RANGE": 10, "TREND": 10, "FLASH": 5}
+    regime_lev_cap = LEVERAGE_CONFIG.get(_btc_regime, ALT_LEVERAGE)
+    selected_leverage = min(selected_leverage, regime_lev_cap)
     
     # ── ANALISI DINAMICA LEVA PER QUESTA COIN ──
     lev_analysis = analyze_market_for_leverage(coin)
@@ -6128,7 +6132,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         return False
 
     target_info = tune_leverage_for_profit_target(
-        coin, entry_px, tp_px, TRADE_SIZE_USD, selected_leverage, ALT_MAX_LEVERAGE, size_mult
+        coin, entry_px, tp_px, TRADE_SIZE_USD, selected_leverage, regime_lev_cap, size_mult
     )
     selected_leverage = target_info["leverage"]
     log_exec(f"[{coin}] 🎯 Target profit: {target_info['reason']}")
