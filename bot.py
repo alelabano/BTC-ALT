@@ -157,7 +157,7 @@ TARGET_PROFIT_FEE_PCT = float(os.getenv("TARGET_PROFIT_FEE_PCT", "0.001"))  # bu
 # Modifica qui: il codice sotto deve leggere queste soglie, non numeri sparsi.
 LEVERAGE_MIN = 3
 ALT_MAX_LEVERAGE = 20
-LEVERAGE_CONFIG = {"RANGE": 10, "TREND": 10, "FLASH": 5}  # cap leva per scalp_mode
+LEVERAGE_CONFIG = {"RANGE": 15, "TREND": 10, "FLASH": 20}  # cap leva per scalp_mode
 SIZE_MULT_MIN = 0.01
 PRICE_ROUND_MAX_DECIMALS = 10
 PRICE_ROUND_FALLBACK_DECIMALS = 6
