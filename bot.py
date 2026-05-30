@@ -4236,7 +4236,7 @@ def detect_scalp_mode(adx_1h, vol_rel, bb_pos, regime, funding_z=0):
     elif adx_1h >= 20:
         return "TREND"
     return "RANGE"
-def check_margin_ok(coin, size, entry_px):
+def check_margin_ok(coin, size, entry_px, lev=None):
     """Verifica margine sufficiente prima di inviare ordine."""
     try:
         state = call(_info.user_state, account.address, label='margin_check', timeout=10)
@@ -4244,7 +4244,8 @@ def check_margin_ok(coin, size, entry_px):
         account_val = float(ms.get("accountValue", 0) or 0)
         margin_used = float(ms.get("totalMarginUsed", 0) or 0)
         available = account_val - margin_used
-        required = (size * entry_px) / LEVERAGE * 1.2  # +20% buffer
+        effective_lev = lev if lev else LEVERAGE
+        required = (size * entry_px) / effective_lev  # margine puro, senza buffer artificiale
         if available < required:
             log_exec(f"[{coin}] Margine insufficiente: need ${required:.2f} have ${available:.2f}")
             return False
@@ -6220,7 +6221,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         time.sleep(0.5)
 
         # ── MARGIN CHECK (from V7) ──
-        if not check_margin_ok(coin, size_nominal, entry_px):
+        if not check_margin_ok(coin, size_nominal, entry_px, lev=actual_lev):
             return False
 
         # ── GTC MAKER → IoC TAKER (from V7) ──
