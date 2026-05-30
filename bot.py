@@ -157,6 +157,7 @@ TARGET_PROFIT_FEE_PCT = float(os.getenv("TARGET_PROFIT_FEE_PCT", "0.001"))  # bu
 # Modifica qui: il codice sotto deve leggere queste soglie, non numeri sparsi.
 LEVERAGE_MIN = 3
 ALT_MAX_LEVERAGE = 20
+LEVERAGE_CONFIG = {"RANGE": 10, "TREND": 10, "FLASH": 5}  # cap leva per scalp_mode
 SIZE_MULT_MIN = 0.01
 PRICE_ROUND_MAX_DECIMALS = 10
 PRICE_ROUND_FALLBACK_DECIMALS = 6
@@ -5994,9 +5995,9 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     lev_analysis = analyze_market_for_leverage(coin)
     selected_leverage = lev_analysis["recommended_leverage"]
 
-    # Cap leva per regime BTC — sovrascrive ALT_MAX_LEVERAGE se più restrittivo
-    LEVERAGE_CONFIG = {"RANGE": 10, "TREND": 10, "FLASH": 5}
-    regime_lev_cap = LEVERAGE_CONFIG.get(_btc_regime, ALT_LEVERAGE)
+    # Cap leva per scalp_mode del segnale (LEVERAGE_CONFIG globale)
+    scalp_mode = signal.get("scalp_mode", "TREND")
+    regime_lev_cap = LEVERAGE_CONFIG.get(scalp_mode, ALT_LEVERAGE)
     selected_leverage = min(selected_leverage, regime_lev_cap)
     
     # ── IMPOSTA LEVA ──
