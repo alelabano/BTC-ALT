@@ -3694,9 +3694,9 @@ def load_state_from_redis():
                if (now - v.get("ts", 0)) < v.get("signal_max_age", SIGNAL_MAX_AGE)}
 
     candidates = _rget("state:candidates") or {}
-    # Filtra candidati scaduti (TTL: 3 cicli processor = 15 min)
+    # Filtra candidati scaduti (TTL: durata ciclo scanner ~20min + margine)
     candidates = {k: v for k, v in candidates.items()
-                  if (now - v.get("ts", 0)) < PROCESSOR_INTERVAL * 3}
+                  if (now - v.get("ts", 0)) < 1800}
 
     cooldowns_raw = _rget("state:cooldowns") or {}
     # Compatibilità: converti vecchio formato {coin: timestamp} al nuovo {coin: {ts, strategy}}
