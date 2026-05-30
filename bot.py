@@ -56,7 +56,7 @@ if not DEEPSEEK_API_KEY:
 
 # ── BTC Scalper Config ───────────────────────────────────────────
 BTC_COIN = "BTC"
-BTC_MARGIN_USD = 2.5       # margine per trade BTC — notional = BTC_MARGIN_USD × leva effettiva
+BTC_MARGIN_USD = 1.2       # margine per trade BTC — notional = BTC_MARGIN_USD × leva effettiva
 MIN_NOTIONAL_USD = 10.0    # Hyperliquid minimum $10 notional (shared BTC + ALT)
 BTC_MAX_POSITIONS = 6
 BTC_COOLDOWN_SEC = 180
@@ -131,9 +131,9 @@ CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 
 # ── Unified Executor Config ─────────────────────────────────────
 ALT_MAX_CONCURRENT = 9         # max altcoin positions
-ALT_TRADE_SIZE_USD = 2.5       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
+ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
 ALT_CHECK_INTERVAL = 2
-ALT_SIGNAL_MAX_AGE = 3 * 60
+ALT_SIGNAL_MAX_AGE = 5 * 60
 SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
 META_REFRESH_CYCLES = 2
 ENTRY_POLL_ATTEMPTS = 2; ENTRY_POLL_INTERVAL = 0.2
@@ -192,7 +192,7 @@ BTC_SIGNAL_TP2_MIN_PCT = 0.005
 BTC_RECOVERED_SL_DIST_PCT = 0.012
 BTC_SL_ATR_REVERSE_MULT = 1.2
 
-ALT_DRIFT_ENTRY_LATE_PCT = 0.02
+ALT_DRIFT_ENTRY_LATE_PCT = 0.025
 ALT_DRIFT_INVALIDATE_PCT = 0.015
 ALT_DRIFT_REPRICE_PCT = 0.002
 ALT_DEFAULT_RR = 1.1
@@ -5088,11 +5088,11 @@ def run_processor():
 
             # ── Fetch candele 3 TF: 1h (trend) + 15m (setup) + 5m (entry) ──
             candles_1h  = fetch_candles(TIMEFRAME_TREND, LOOKBACK_DAYS_TREND, "-1h")
-            time.sleep(0.3)
+            time.sleep(0.1)
             candles_15m = fetch_candles(TIMEFRAME_SETUP, LOOKBACK_DAYS_SETUP, "-15m")
-            time.sleep(0.3)
+            time.sleep(0.1)
             candles_5m  = fetch_candles(TIMEFRAME_ENTRY, LOOKBACK_DAYS_ENTRY, "-5m")
-            time.sleep(0.3)
+            time.sleep(0.1)
 
             if not candles_1h or len(candles_1h) < MIN_CANDLES_TREND:
                 skip_counts["candles_4h"] += 1  # reuso counter
