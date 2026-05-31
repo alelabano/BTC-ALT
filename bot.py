@@ -3749,6 +3749,11 @@ def get_candidate(coin: str) -> dict:
     with _state_lock:
         return dict(_candidates_store.get(coin, {}))
 
+def get_candidates_store() -> dict:
+    """Ritorna tutti i candidati correnti (usato da SR fast-entry)."""
+    with _state_lock:
+        return dict(_candidates_store)
+
 def set_candidate(coin: str, data: dict):
     with _state_lock:
         _candidates_store[coin] = data
@@ -4236,6 +4241,157 @@ def detect_scalp_mode(adx_1h, vol_rel, bb_pos, regime, funding_z=0):
     elif adx_1h >= 20:
         return "TREND"
     return "RANGE"
+def compute_sr_levels(coin: str, n_levels: int = 5) -> dict:
+    """
+    Calcola supporti e resistenze strutturali da candle 4h e 1d.
+    Metodo: swing high/low su finestra scorrevole + clustering dei livelli vicini.
+    Ritorna {'supports': [...], 'resistances': [...]} ordinati per distanza dal prezzo.
+    """
+    try:
+        now = int(time.time() * 1000)
+        # Fetch 4h (60 candele = 10 giorni) e 1d (30 giorni)
+        c4h = call(_info.candles_snapshot, coin, "4h", now - 86400000 * 10, now, timeout=15)
+        c1d = call(_info.candles_snapshot, coin, "1d", now - 86400000 * 30, now, timeout=15)
+        if not c4h or len(c4h) < 10:
+            return {"supports": [], "resistances": []}
+
+        def to_df(candles):
+            df = pd.DataFrame(candles)
+            df.columns = ['t','T','s','i','o','c','h','l','v','n']
+            df[['h','l','c']] = df[['h','l','c']].astype(float)
+            return df
+
+        df4 = to_df(c4h)
+        df1d = to_df(c1d) if c1d and len(c1d) >= 5 else pd.DataFrame()
+
+        current_px = float(df4['c'].iloc[-1])
+        swing_window = 3  # candele a sinistra e destra per swing
+
+        highs, lows = [], []
+
+        # Swing su 4h
+        for i in range(swing_window, len(df4) - swing_window):
+            h = df4['h'].iloc[i]
+            l = df4['l'].iloc[i]
+            if all(h >= df4['h'].iloc[i-swing_window:i]) and all(h >= df4['h'].iloc[i+1:i+swing_window+1]):
+                highs.append(h)
+            if all(l <= df4['l'].iloc[i-swing_window:i]) and all(l <= df4['l'].iloc[i+1:i+swing_window+1]):
+                lows.append(l)
+
+        # Aggiungi swing su 1d se disponibile
+        if not df1d.empty:
+            for i in range(2, len(df1d) - 2):
+                h = df1d['h'].iloc[i]
+                l = df1d['l'].iloc[i]
+                if all(h >= df1d['h'].iloc[i-2:i]) and all(h >= df1d['h'].iloc[i+1:i+3]):
+                    highs.append(h)
+                if all(l <= df1d['l'].iloc[i-2:i]) and all(l <= df1d['l'].iloc[i+1:i+3]):
+                    lows.append(l)
+
+        # Clustering: raggruppa livelli entro 0.5% tra loro
+        def cluster(levels, tol_pct=0.005):
+            if not levels:
+                return []
+            levels = sorted(levels)
+            clusters = [[levels[0]]]
+            for lv in levels[1:]:
+                if (lv - clusters[-1][-1]) / clusters[-1][-1] < tol_pct:
+                    clusters[-1].append(lv)
+                else:
+                    clusters.append([lv])
+            return [sum(c) / len(c) for c in clusters]
+
+        resistances = sorted([lv for lv in cluster(highs) if lv > current_px * 1.001])
+        supports    = sorted([lv for lv in cluster(lows)  if lv < current_px * 0.999], reverse=True)
+
+        return {
+            "supports":    supports[:n_levels],
+            "resistances": resistances[:n_levels],
+            "current_px":  current_px
+        }
+    except Exception as e:
+        log_err(f"[SR] Errore calcolo S/R per {coin}: {e}")
+        return {"supports": [], "resistances": []}
+
+
+def check_sr_clearance(coin: str, direction: str, entry_px: float, tp_px: float,
+                       sr: dict, min_clearance_pct: float = 0.003) -> tuple:
+    """
+    Verifica che la struttura S/R non comprometta il trade.
+
+    SHORT:
+      1. Supporto tra TP e entry → ostacolo diretto alla discesa
+      2. Supporto più vicino del TP × 1.5 → R:R strutturale negativo
+      3. Resistenza entro 2% sopra entry → rischio rimbalzo verso l'alto
+
+    LONG:
+      1. Resistenza tra entry e TP → ostacolo diretto alla salita
+      2. Resistenza più vicina del TP × 1.5 → R:R strutturale negativo
+      3. Supporto entro 2% sotto entry diventato resistenza → rischio caduta
+
+    Ritorna (ok: bool, motivo: str).
+    """
+    if not sr or (not sr.get("resistances") and not sr.get("supports")):
+        return True, ""
+
+    supports    = sr.get("supports", [])
+    resistances = sr.get("resistances", [])
+
+    if direction == "SHORT":
+        tp_dist = entry_px - tp_px  # distanza positiva verso il basso
+
+        # 1. Supporto direttamente tra TP e entry
+        blocking = [lv for lv in supports if tp_px < lv < entry_px]
+        if blocking:
+            nearest = max(blocking)  # il più vicino all'entry
+            dist_pct = (entry_px - nearest) / entry_px * 100
+            return False, f"supporto a {nearest:.4f} ({dist_pct:.1f}% sotto entry) blocca la discesa verso TP"
+
+        # 2. Supporto più vicino troppo ravvicinato rispetto al TP
+        below = [lv for lv in supports if lv < entry_px]
+        if below:
+            nearest_sup = max(below)
+            dist_to_sup = entry_px - nearest_sup
+            if dist_to_sup < tp_dist * 1.5:
+                return False, (f"supporto a {nearest_sup:.4f} troppo vicino "
+                               f"(dist {dist_to_sup:.2f} < TP dist {tp_dist:.2f} × 1.5)")
+
+        # 3. Resistenza ravvicinata sopra entry → rimbalzo probabile
+        near_res = [lv for lv in resistances if entry_px < lv < entry_px * 1.02]
+        if near_res:
+            nearest = min(near_res)
+            dist_pct = (nearest - entry_px) / entry_px * 100
+            return False, f"resistenza a {nearest:.4f} ({dist_pct:.1f}% sopra entry) — rimbalzo verso SHORT improbabile"
+
+    else:  # LONG
+        tp_dist = tp_px - entry_px  # distanza positiva verso l'alto
+
+        # 1. Resistenza direttamente tra entry e TP
+        blocking = [lv for lv in resistances if entry_px < lv < tp_px]
+        if blocking:
+            nearest = min(blocking)
+            dist_pct = (nearest - entry_px) / entry_px * 100
+            return False, f"resistenza a {nearest:.4f} ({dist_pct:.1f}% sopra entry) blocca la salita verso TP"
+
+        # 2. Resistenza più vicina troppo ravvicinata rispetto al TP
+        above = [lv for lv in resistances if lv > entry_px]
+        if above:
+            nearest_res = min(above)
+            dist_to_res = nearest_res - entry_px
+            if dist_to_res < tp_dist * 1.5:
+                return False, (f"resistenza a {nearest_res:.4f} troppo vicina "
+                               f"(dist {dist_to_res:.2f} < TP dist {tp_dist:.2f} × 1.5)")
+
+        # 3. Supporto ravvicinato sotto entry → possibile caduta
+        near_sup = [lv for lv in supports if entry_px * 0.98 < lv < entry_px]
+        if near_sup:
+            nearest = max(near_sup)
+            dist_pct = (entry_px - nearest) / entry_px * 100
+            return False, f"supporto a {nearest:.4f} ({dist_pct:.1f}% sotto entry) — rottura probabile"
+
+    return True, ""
+
+
 def check_margin_ok(coin, size, entry_px, lev=None):
     """Verifica margine sufficiente prima di inviare ordine."""
     try:
@@ -5379,6 +5535,29 @@ def run_processor():
             if not can_trade:
                 continue
 
+            # ── SR PROXIMITY BOOST ────────────────────────────────────
+            # Se il prezzo è vicino a un livello S/R strutturale noto,
+            # il segnale REVERSAL è più affidabile — abbassa la soglia confluence.
+            sr_boost = False
+            if strategy == "REVERSAL":
+                sr_data = compute_sr_levels(coin, n_levels=3)
+                sr_proximity_pct = 0.005  # entro 0.5% dal livello
+                if direction == "LONG" and sr_data.get("supports"):
+                    nearest_sup = min(sr_data["supports"], key=lambda lv: abs(lv - px))
+                    if abs(nearest_sup - px) / px <= sr_proximity_pct:
+                        sr_boost = True
+                        log_alt(f"[{coin}] 📍 SR boost LONG: prezzo {px:.4f} vicino supporto {nearest_sup:.4f}")
+                elif direction == "SHORT" and sr_data.get("resistances"):
+                    nearest_res = min(sr_data["resistances"], key=lambda lv: abs(lv - px))
+                    if abs(nearest_res - px) / px <= sr_proximity_pct:
+                        sr_boost = True
+                        log_alt(f"[{coin}] 📍 SR boost SHORT: prezzo {px:.4f} vicino resistenza {nearest_res:.4f}")
+                if sr_boost:
+                    # Abbassa la soglia confluence di 1 punto
+                    entry_profile = dict(entry_profile)
+                    entry_profile["confluence_min"] = max(1, entry_profile["confluence_min"] - 1)
+                    entry_profile["pf_min"] = max(1.0, entry_profile["pf_min"] - 0.10)
+
             recent_closes = df['close'].iloc[-12:].tolist()
 
             # ══════════════════════════════════════════════════════════
@@ -6096,6 +6275,18 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     if sl_raw <= 0 or tp_raw <= 0:
         log_err(f"[{coin}] SL/TP non validi")
         return False
+
+    # ── SUPPORTI / RESISTENZE — verifica clearance tra entry e TP ──
+    sr = compute_sr_levels(coin)
+    sr_ok, sr_reason = check_sr_clearance(coin, direction, mid_px, tp_raw, sr)
+    if not sr_ok:
+        log_exec(f"[{coin}] ❌ SR block [{direction}]: {sr_reason}")
+        delete_signal(coin)
+        return False
+    if sr.get("supports") or sr.get("resistances"):
+        near_sup = sr["supports"][:2]  if sr.get("supports")    else []
+        near_res = sr["resistances"][:2] if sr.get("resistances") else []
+        log_exec(f"[{coin}] SR ok | sup:{[f'{x:.4f}' for x in near_sup]} res:{[f'{x:.4f}' for x in near_res]}")
 
     # Calcola decimali minimi necessari: se il prezzo è 0.048 e px_dec=2,
     # arrotondare a 2 decimali collassa entry/SL/TP a 0.05.
@@ -7488,6 +7679,129 @@ def executor_thread_alt():
                             "ml_alt_features":  sig.get("ml_alt_features", []),
                         }
                         time.sleep(5)
+
+                # ── SR FAST-ENTRY ──────────────────────────────────────
+                # Se non ci sono segnali attivi ma ci sono slot liberi,
+                # controlla se qualche coin si trova su un livello S/R noto.
+                # Condizioni minime: RSI estremo + wick di inversione + volume.
+                if slots_free > 0 and not candidates:
+                    sr_candidates = get_candidates_store()  # coin dal processor
+                    for coin in list(sr_candidates.keys())[:15]:  # top 15 per velocità
+                        if coin in active_positions: continue
+                        if coin in pending_orders:   continue
+                        if (now - last_trade_time.get(coin, 0)) < COIN_COOLDOWN: continue
+                        is_corr, _ = is_correlated_with_active(coin, active_coin_set)
+                        if is_corr: continue
+                        try:
+                            mid_px = float(mids.get(coin, 0) or 0)
+                            if mid_px <= 0: continue
+                            sr_data = compute_sr_levels(coin, n_levels=3)
+                            if not sr_data.get("supports") and not sr_data.get("resistances"):
+                                continue
+                            # Fetch candle 5m per RSI e wick
+                            c5 = call(_info.candles_snapshot, coin, "5m",
+                                      int(now * 1000) - 3600000, int(now * 1000), timeout=8)
+                            if not c5 or len(c5) < 10: continue
+                            last = c5[-1]
+                            o, h, l, c_px, v = (float(last[k]) for k in ['o','h','l','c','v'])
+                            atr = float(np.mean([abs(float(c5[i]['h']) - float(c5[i]['l']))
+                                                  for i in range(-10, 0)]))
+                            if atr <= 0: continue
+                            closes = [float(x['c']) for x in c5[-14:]]
+                            gains  = [max(closes[i]-closes[i-1], 0) for i in range(1, len(closes))]
+                            losses = [max(closes[i-1]-closes[i], 0) for i in range(1, len(closes))]
+                            avg_g  = sum(gains) / len(gains) if gains else 0
+                            avg_l  = sum(losses) / len(losses) if losses else 1e-9
+                            rsi    = 100 - 100 / (1 + avg_g / avg_l)
+
+                            direction = None
+                            sr_level  = None
+                            proximity_pct = 0.010  # entro 1.0% dal livello
+
+                            # Test LONG: prezzo scende verso un supporto (da sopra)
+                            # → il prezzo si avvicina al supporto dall'alto = possibile rimbalzo LONG
+                            for sup in sr_data.get("supports", []):
+                                if 0 < (mid_px - sup) / mid_px <= proximity_pct and rsi < 35:
+                                    lower_wick = min(o, c_px) - l
+                                    body       = abs(c_px - o) if abs(c_px - o) > 0 else atr * 0.1
+                                    if lower_wick > body * 1.2 and v > 0:
+                                        direction = "LONG"
+                                        sr_level  = sup
+                                        break
+
+                            # Test SHORT: prezzo sale verso una resistenza (da sotto)
+                            # → il prezzo si avvicina alla resistenza dal basso = possibile rimbalzo SHORT
+                            if not direction:
+                                for res in sr_data.get("resistances", []):
+                                    if 0 < (res - mid_px) / mid_px <= proximity_pct and rsi > 65:
+                                        upper_wick = h - max(o, c_px)
+                                        body       = abs(c_px - o) if abs(c_px - o) > 0 else atr * 0.1
+                                        if upper_wick > body * 1.2 and v > 0:
+                                            direction = "SHORT"
+                                            sr_level  = res
+                                            break
+
+                            if not direction: continue
+
+                            # Calcola SL/TP da ATR
+                            sl_dist = atr * 1.5
+                            tp_dist = atr * 2.0
+                            if direction == "LONG":
+                                sl_px = mid_px - sl_dist
+                                tp_px = mid_px + tp_dist
+                            else:
+                                sl_px = mid_px + sl_dist
+                                tp_px = mid_px - tp_dist
+
+                            # Verifica clearance S/R sul TP
+                            sr_ok, sr_reason = check_sr_clearance(coin, direction, mid_px, tp_px, sr_data)
+                            if not sr_ok:
+                                log_exec(f"[{coin}] SR fast-entry skip: {sr_reason}")
+                                continue
+
+                            log_exec(f"[{coin}] ⚡ SR fast-entry [{direction}] livello:{sr_level:.4f} RSI:{rsi:.1f}")
+                            fast_sig = {
+                                "direction":    direction,
+                                "signal_type":  "REVERSAL",
+                                "strategy":     "REVERSAL",
+                                "scalp_mode":   "RANGE",
+                                "sl":           sl_px,
+                                "tp":           tp_px,
+                                "signal_px":    mid_px,
+                                "ts":           now,
+                                "score":        SETUP_SCORE_MIN,
+                                "profit_factor": 1.5,
+                                "win_rate":     0.50,
+                                "signal_max_age": 120,
+                                "sr_level":     sr_level,
+                                "entry_profile": {"pf_min": 1.2, "wr_min": 0.44,
+                                                   "confluence_min": 2, "volume_15m_min": 0.3},
+                            }
+                            result = open_trade(coin, fast_sig, mids,
+                                                sz_decimals.get(coin, 2),
+                                                px_decimals.get(coin, 2),
+                                                size_mult=1.0)
+                            if result in ("filled", "pending"):
+                                last_trade_time[coin] = now
+                                active_coin_set.add(coin)
+                                slots_free -= 1
+                                open_trade_meta[coin] = {
+                                    "entry_px":        mid_px,
+                                    "signal":          fast_sig,
+                                    "ts_open":         now,
+                                    "partial_done":    False,
+                                    "trailing_active": False,
+                                    "current_ts":      0,
+                                    "peak_pnl":        0.0,
+                                    "worst_pnl":       0.0,
+                                    "profit_lock_sl":  0.0,
+                                    "ml_alt_features": [],
+                                }
+                                time.sleep(5)
+                                if slots_free <= 0: break
+                        except Exception as e_sr:
+                            log_err(f"[{coin}] SR fast-entry error: {e_sr}")
+                            continue
 
         except Exception as e:
             log_err(f"Executor loop: {e}")
