@@ -5538,22 +5538,24 @@ def run_processor():
             # ── SR PROXIMITY BOOST ────────────────────────────────────
             # Se il prezzo è vicino a un livello S/R strutturale noto,
             # il segnale REVERSAL è più affidabile — abbassa la soglia confluence.
+            # Distanza massima dinamica basata su ATR (si adatta alla volatilità).
             sr_boost = False
             if strategy == "REVERSAL":
                 sr_data = compute_sr_levels(coin, n_levels=3)
-                sr_proximity_pct = 0.005  # entro 0.5% dal livello
+                max_dist_sr = atr * 0.5  # 0.3–0.8 × ATR a seconda dell'aggressività
                 if direction == "LONG" and sr_data.get("supports"):
                     nearest_sup = min(sr_data["supports"], key=lambda lv: abs(lv - px))
-                    if abs(nearest_sup - px) / px <= sr_proximity_pct:
+                    dist = px - nearest_sup  # positivo = prezzo sopra il supporto (avvicinamento)
+                    if 0 < dist <= max_dist_sr:
                         sr_boost = True
-                        log_alt(f"[{coin}] 📍 SR boost LONG: prezzo {px:.4f} vicino supporto {nearest_sup:.4f}")
+                        log_alt(f"[{coin}] 📍 SR boost LONG: prezzo {px:.4f} vicino supporto {nearest_sup:.4f} (dist {dist:.4f} ≤ ATR×0.5 {max_dist_sr:.4f})")
                 elif direction == "SHORT" and sr_data.get("resistances"):
                     nearest_res = min(sr_data["resistances"], key=lambda lv: abs(lv - px))
-                    if abs(nearest_res - px) / px <= sr_proximity_pct:
+                    dist = nearest_res - px  # positivo = prezzo sotto la resistenza (avvicinamento)
+                    if 0 < dist <= max_dist_sr:
                         sr_boost = True
-                        log_alt(f"[{coin}] 📍 SR boost SHORT: prezzo {px:.4f} vicino resistenza {nearest_res:.4f}")
+                        log_alt(f"[{coin}] 📍 SR boost SHORT: prezzo {px:.4f} vicino resistenza {nearest_res:.4f} (dist {dist:.4f} ≤ ATR×0.5 {max_dist_sr:.4f})")
                 if sr_boost:
-                    # Abbassa la soglia confluence di 1 punto
                     entry_profile = dict(entry_profile)
                     entry_profile["confluence_min"] = max(1, entry_profile["confluence_min"] - 1)
                     entry_profile["pf_min"] = max(1.0, entry_profile["pf_min"] - 0.10)
@@ -7679,8 +7681,7 @@ def executor_thread_alt():
                             "ml_alt_features":  sig.get("ml_alt_features", []),
                         }
                         time.sleep(5)
-
-                # ── SR FAST-ENTRY ──────────────────────────────────────
+                        active_positions = get_open_positions()  # aggiorna per evitare doppio open
                 # Se non ci sono segnali attivi ma ci sono slot liberi,
                 # controlla se qualche coin si trova su un livello S/R noto.
                 # Condizioni minime: RSI estremo + wick di inversione + volume.
@@ -7716,12 +7717,12 @@ def executor_thread_alt():
 
                             direction = None
                             sr_level  = None
-                            proximity_pct = 0.010  # entro 1.0% dal livello
+                            max_dist  = atr * 0.5  # distanza massima dinamica (0.3–0.8 × ATR)
 
-                            # Test LONG: prezzo scende verso un supporto (da sopra)
-                            # → il prezzo si avvicina al supporto dall'alto = possibile rimbalzo LONG
+                            # Test LONG: prezzo scende verso supporto (da sopra), entro ATR
                             for sup in sr_data.get("supports", []):
-                                if 0 < (mid_px - sup) / mid_px <= proximity_pct and rsi < 35:
+                                dist = mid_px - sup
+                                if 0 < dist <= max_dist and rsi < 35:
                                     lower_wick = min(o, c_px) - l
                                     body       = abs(c_px - o) if abs(c_px - o) > 0 else atr * 0.1
                                     if lower_wick > body * 1.2 and v > 0:
@@ -7729,11 +7730,11 @@ def executor_thread_alt():
                                         sr_level  = sup
                                         break
 
-                            # Test SHORT: prezzo sale verso una resistenza (da sotto)
-                            # → il prezzo si avvicina alla resistenza dal basso = possibile rimbalzo SHORT
+                            # Test SHORT: prezzo sale verso resistenza (da sotto), entro ATR
                             if not direction:
                                 for res in sr_data.get("resistances", []):
-                                    if 0 < (res - mid_px) / mid_px <= proximity_pct and rsi > 65:
+                                    dist = res - mid_px
+                                    if 0 < dist <= max_dist and rsi > 65:
                                         upper_wick = h - max(o, c_px)
                                         body       = abs(c_px - o) if abs(c_px - o) > 0 else atr * 0.1
                                         if upper_wick > body * 1.2 and v > 0:
@@ -7798,6 +7799,7 @@ def executor_thread_alt():
                                     "ml_alt_features": [],
                                 }
                                 time.sleep(5)
+                                active_positions = get_open_positions()  # aggiorna per evitare doppio open
                                 if slots_free <= 0: break
                         except Exception as e_sr:
                             log_err(f"[{coin}] SR fast-entry error: {e_sr}")
