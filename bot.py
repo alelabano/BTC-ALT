@@ -1,5 +1,6 @@
 """
 unified_bot.py — BTC Scalper V7 + Altcoin Processor in un singolo container.
+Versione: bot-5-fixed (correzioni leva dinamica)
 
 ARCHITETTURA (4 thread):
   Thread A — BTC_SCANNER:  regime 4h + backtest + V7 analytics ogni 5 min
@@ -14,6 +15,17 @@ V7 MODULES (shared):
 
 BTC MODES: RANGE (ADX<20) | TREND (ADX>25) | FLASH (vol>3x)
 ALT MODES: Mean Reversion + Trend Following + Scalping
+
+LEVA DINAMICA (corretta):
+  - analyze_market_for_leverage() → score composito → LEV_LOW=10 | LEV_NORMAL=15 | LEV_HIGH=20
+  - Cap regime: LEVERAGE_CONFIG = {RANGE: 15, TREND: 10, FLASH: 20}
+  - Ordine applicazione: min(score_lev, regime_cap) → poi check max_exchange
+  - tune_leverage_for_profit_target() riceve regime_cap (non max_exchange) → non buca il cap
+  - TP_PRICE_PCT / SL_PRICE_PCT calcolati per leva del regime TREND (10x) come riferimento
+  - Per leva effettiva runtime: compute_tp_sl_pct(selected_leverage) → (tp_pct, sl_pct)
+  - LEVERAGE_OPTIONS = [10, 15, 20] allineato a LEV_LOW/NORMAL/HIGH (rimosso 5x)
+
+SIZE: margin=$1.20 × leva → notional (floor MIN_NOTIONAL_USD=$10, isolated margin)
 
 Fleet system: INTERNO (no più Redis cross-worker).
 BTC engine genera regime/bias → ALT engine lo legge in-memory.
@@ -66,19 +78,34 @@ BTC_SCAN_INTERVAL = 5
 BTC_SIGNAL_MAX_AGE = 30
 BTC_REGIME_INTERVAL = 300
 
-# ROE-based SL/TP — SL
-BTC_LEVERAGE = 10   # default value, not used for live trading (dynamic leverage used)
-ALT_LEVERAGE = 10
-ROE_TP = 0.10; ROE_SL = 0.05  
-TP_PRICE_PCT = ROE_TP / BTC_LEVERAGE  # 0.003 = 0.3%
-SL_PRICE_PCT = ROE_SL / BTC_LEVERAGE  # 0.003 = 0.3%
+# ROE-based SL/TP — calcolati dinamicamente per regime con leva effettiva
+# BTC_LEVERAGE NON viene più usato per TP_PRICE_PCT / SL_PRICE_PCT statici.
+# I target price-pct sono calcolati al momento del trade tramite compute_tp_sl_pct().
+ALT_LEVERAGE = 10   # default leva ALT (sovrascritta da analyze_market_for_leverage)
+ROE_TP = 0.10; ROE_SL = 0.05
 
-RANGE_SL_ATR = 1.2; RANGE_TP_PCT = TP_PRICE_PCT
+# TP/SL price-pct per regime — calcolati con la leva cap del regime stesso.
+# Questo garantisce coerenza tra leva effettiva e distanze target.
+def compute_tp_sl_pct(leverage: int):
+    """Ritorna (tp_pct, sl_pct) price-based coerenti con la leva effettiva."""
+    lev = max(1, leverage)
+    return ROE_TP / lev, ROE_SL / lev
+
+# Valori statici per compatibilità con il codice che li legge prima del trade.
+# Usano la leva del regime TREND (10x) come riferimento conservativo.
+TP_PRICE_PCT = ROE_TP / LEVERAGE_CONFIG.get("TREND", 10)   # 0.010
+SL_PRICE_PCT = ROE_SL / LEVERAGE_CONFIG.get("TREND", 10)   # 0.005
+
+# Per RANGE (15x): TP=0.0067, SL=0.0033
+# Per FLASH (20x): TP=0.005,  SL=0.0025
+# I valori effettivi vengono calcolati con compute_tp_sl_pct(selected_leverage) al momento dell'entry.
+
+RANGE_SL_ATR = 1.2; RANGE_TP_PCT = ROE_TP / LEVERAGE_CONFIG.get("RANGE", 15)
 RANGE_SL_MIN = 0.003; RANGE_SL_MAX = 0.006  # 0.3% - 0.6%
 TREND_SL_ATR = 1.2; TREND_TP_RR = 1.5  # R:R 1:1.5
 TREND_SL_MIN = 0.004; TREND_SL_MAX = 0.008
 TREND_TRAIL_ATR = 0.7; TREND_PARTIAL = 0.4
-FLASH_SL_ATR = 1.0; FLASH_TP_PCT = TP_PRICE_PCT
+FLASH_SL_ATR = 1.0; FLASH_TP_PCT = ROE_TP / LEVERAGE_CONFIG.get("FLASH", 20)
 FLASH_SL_MIN = 0.002; FLASH_SL_MAX = 0.004  # 0.2% - 0.4% (flash = più stretto)
 FLASH_TRAILING = False; FLASH_USE_IOC = True
 
@@ -145,7 +172,7 @@ PROCESSOR_MAX_COINS = 30
 CORRELATION_THRESHOLD = 0.55
 MIN_NOTIONAL_USD = 10.0          # Hyperliquid minimo assoluto
 BASE_MARGIN_USD = 1.2            # Margine base per trade ($1)
-LEVERAGE_OPTIONS = [5, 10, 15]
+LEVERAGE_OPTIONS = [10, 15, 20]  # allineato a LEV_LOW / LEV_NORMAL / LEV_HIGH
 BTC_BASE_MARGIN = 1.2
 ALT_MARGIN_PCT = 0.2
 _optimal_leverage_cache = {"btc": {"lev": 10, "ts": 0, "reasoning": ""}, "alt": {}}
@@ -1925,8 +1952,9 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
     """
     Pipeline in 3 step:
       1. ANALISI MERCATO  — volatilità (ATR%), trend (ADX), volume (vol_rel), spread
-      2. DETERMINA LEVA   — regole hard priority + score composito → 5x | 10x | 15x
-      3. (caller)         — CALCOLA SIZE
+      2. DETERMINA LEVA   — regole hard priority + score composito → 10x | 15x | 20x
+                            (LEV_LOW=10, LEV_NORMAL=15, LEV_HIGH=20)
+      3. (caller)         — applica min(score_lev, LEVERAGE_CONFIG[regime]) → CALCOLA SIZE
     """
     _default = {
         "recommended_leverage": LEV_DEFAULT, 
@@ -2086,7 +2114,10 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
 
     # 2. Applica il moltiplicatore sul margine
     margin_used = margin_base * size_mult
-    
+
+    # 2b. Cap assoluto: il margine impegnato non può mai superare $1.20 per trade
+    margin_used = min(float(margin_used), 1.2)
+
     # 3. Calcolo del Notional Teorico e della Size nominale
     notional_teorico = margin_used * leverage
     notional_target = max(MIN_NOTIONAL_USD, notional_teorico)
@@ -3242,15 +3273,22 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
         # ── ANALISI DINAMICA LEVA ──
         lev_analysis = analyze_market_for_leverage("BTC")
         selected_leverage = lev_analysis["recommended_leverage"]
-        
-        # Cap leva al massimo consentito dall'exchange
+
+        # FIX: cap applicato nell'ordine corretto:
+        #  1. Cap regime (LEVERAGE_CONFIG) — rispetta la logica risk/regime
+        #  2. Cap exchange (get_max_leverage()) — rispetta i limiti tecnici
+        regime_lev_cap = LEVERAGE_CONFIG.get(scalp_mode, LEVERAGE_CONFIG["TREND"])
+        selected_leverage = min(selected_leverage, regime_lev_cap)
         max_lev_allowed = get_max_leverage()
         if selected_leverage > max_lev_allowed:
-            log_btc(f"⚠️ Leva {selected_leverage}x > max {max_lev_allowed}x → ridotta")
+            log_btc(f"⚠️ Leva {selected_leverage}x > max exchange {max_lev_allowed}x → ridotta")
             selected_leverage = max_lev_allowed
-        
+        log_btc(f"⚙️ Regime {scalp_mode}: leva score={lev_analysis['recommended_leverage']}x → cap={regime_lev_cap}x → finale={selected_leverage}x")
+
+        # FIX: tune_leverage_for_profit_target riceve il cap REGIME, non il max exchange.
+        # In questo modo non può mai bucare il limite di rischio del regime.
         target_info = tune_leverage_for_profit_target(
-            BTC_COIN, entry_px, tp, BTC_MARGIN_USD, selected_leverage, max_lev_allowed, size_mult
+            BTC_COIN, entry_px, tp, BTC_MARGIN_USD, selected_leverage, regime_lev_cap, size_mult
         )
         selected_leverage = target_info["leverage"]
         log_btc(f"🎯 Target profit: {target_info['reason']}")
@@ -3278,6 +3316,8 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
             return False
         
         log_btc(f"💰 SIZE: margin=${margin_used:.2f} × leva={selected_leverage}x → notional=${notional:.2f} → {size} BTC")
+        _tp_pct_eff, _sl_pct_eff = compute_tp_sl_pct(selected_leverage)
+        log_btc(f"📐 TP/SL price-pct effettivi per {selected_leverage}x: TP={_tp_pct_eff:.3%} SL={_sl_pct_eff:.3%}")
 
         # ── ENTRY: aggressivo al mid ──
         mid = get_mid()
