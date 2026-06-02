@@ -133,6 +133,7 @@ CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 ALT_MAX_CONCURRENT = 9         # max altcoin positions
 ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
 ALT_CHECK_INTERVAL = 2
+ALT_LEVERAGE = 10              # leva default ALT (cap effettivo da LEVERAGE_CONFIG per scalp_mode)
 ALT_SIGNAL_MAX_AGE = 5 * 60
 SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
 META_REFRESH_CYCLES = 2
