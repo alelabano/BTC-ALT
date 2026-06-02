@@ -7837,12 +7837,21 @@ def set_all_isolated():
     except Exception as e:
         log("MAIN", f"⚠️ set_all_isolated error: {e}")
         return
+    # Usa leva minima da LEVERAGE_CONFIG (non 1x — causerebbe margin explosion su posizioni aperte)
+    default_lev = min(LEVERAGE_CONFIG.values())  # 10x
     ok = 0; fail = 0
     for coin in coins:
+        # Non toccare coin con posizione aperta
+        try:
+            pos = get_open_positions()
+            if coin in pos:
+                continue
+        except:
+            pass
         for attempt in range(3):
             try:
-                call(_exchange.update_leverage, 1, coin, is_cross=False, timeout=8)
-                ok += 3
+                call(_exchange.update_leverage, default_lev, coin, is_cross=False, timeout=8)
+                ok += 1
                 break
             except Exception as e:
                 if "429" in str(e) and attempt < 2:
@@ -7851,7 +7860,7 @@ def set_all_isolated():
                     fail += 1
                     break
         time.sleep(0.05)
-    log("MAIN", f"🔒 Isolated: {ok} OK, {fail} fail su {len(coins)} coin")
+    log("MAIN", f"🔒 Isolated {default_lev}x: {ok} OK, {fail} fail su {len(coins)} coin")
 
 def main():
     log("MAIN", "🚀 UNIFIED BOT — BTC Scalper V7 + Altcoin Processor")
