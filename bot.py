@@ -18,7 +18,7 @@ ALT MODES: Mean Reversion + Trend Following + Scalping
 
 LEVA DINAMICA (corretta):
   - analyze_market_for_leverage() → score composito → LEV_LOW=10 | LEV_NORMAL=15 | LEV_HIGH=20
-  - Cap regime: LEVERAGE_CONFIG = {RANGE: 15, TREND: 10, FLASH: 20}
+  - Cap regime: LEVERAGE_CONFIG = {RANGE: 15, TREND: 20, FLASH: 10}
   - Ordine applicazione: min(score_lev, regime_cap) → poi check max_exchange
   - tune_leverage_for_profit_target() riceve regime_cap (non max_exchange) → non buca il cap
   - TP_PRICE_PCT / SL_PRICE_PCT calcolati per leva del regime TREND (10x) come riferimento
@@ -105,7 +105,7 @@ RANGE_SL_MIN = 0.003; RANGE_SL_MAX = 0.006  # 0.3% - 0.6%
 TREND_SL_ATR = 1.2; TREND_TP_RR = 1.5  # R:R 1:1.5
 TREND_SL_MIN = 0.004; TREND_SL_MAX = 0.008
 TREND_TRAIL_ATR = 0.7; TREND_PARTIAL = 0.4
-FLASH_SL_ATR = 1.0; FLASH_TP_PCT = ROE_TP / LEVERAGE_CONFIG.get("FLASH", 20)
+FLASH_SL_ATR = 1.0; FLASH_TP_PCT = ROE_TP / LEVERAGE_CONFIG.get("FLASH", 10)
 FLASH_SL_MIN = 0.002; FLASH_SL_MAX = 0.004  # 0.2% - 0.4% (flash = più stretto)
 FLASH_TRAILING = False; FLASH_USE_IOC = True
 
@@ -184,7 +184,7 @@ TARGET_PROFIT_FEE_PCT = float(os.getenv("TARGET_PROFIT_FEE_PCT", "0.001"))  # bu
 # Modifica qui: il codice sotto deve leggere queste soglie, non numeri sparsi.
 LEVERAGE_MIN = 3
 ALT_MAX_LEVERAGE = 20
-LEVERAGE_CONFIG = {"RANGE": 15, "TREND": 10, "FLASH": 20}  # cap leva per scalp_mode
+LEVERAGE_CONFIG = {"RANGE": 15, "TREND": 20, "FLASH": 10}  # cap leva per scalp_mode
 SIZE_MULT_MIN = 0.01
 PRICE_ROUND_MAX_DECIMALS = 10
 PRICE_ROUND_FALLBACK_DECIMALS = 6
@@ -1192,103 +1192,128 @@ def get_flow_signal():
 
 class OnlineGBClassifier:
     """
-    Mini gradient boosting binario online — pesi aggiornati ad ogni sample.
-    Features: RSI, MACD, ADX, vol, funding_z, sentiment, OB_imbalance, CVD,
-              regime_encoded, scalp_mode_encoded, setup_score, oi_change.
-    Target: 1 = trade vincente, 0 = perdente.
+    Regressore SGD online — predice trade_expectancy (pnl_pct normalizzato).
+    Target: trade_expectancy = pnl_pct / atr_pct  (R-multiple, clippato ±5)
+      > 0  → trade profittevole (guadagno in unità di ATR)
+      < 0  → trade perdente
+      = 0  → break-even
+    Il predittore stima l'expectancy attesa; la soglia di blocco è su 0.0.
+
+    Features (25):
+      Entry context (16): rsi_15m, rsi_1h, macd_hist, adx_1h, vol_rel,
+                          funding_z, sentiment, ob_imbalance, cvd_slope,
+                          regime_enc, mode_enc, setup_score, oi_change_pct,
+                          bb_pos, ema_slope, spread
+      Post-trade (9):     mae, mfe, spread_pct, atr_pct,
+                          distance_support, distance_resistance,
+                          entry_delay_pct, coin_category_enc, leverage
+    Le feature post-trade sono disponibili solo all'update (dopo chiusura);
+    al predict vengono passate come 0.0 (vengono normalizzate online).
     """
     FEATURE_NAMES = [
+        # ── entry context (16) ──────────────────────────────────────
         "rsi_15m", "rsi_1h", "macd_hist", "adx_1h", "vol_rel",
         "funding_z", "sentiment", "ob_imbalance", "cvd_slope",
         "regime_enc", "mode_enc", "setup_score", "oi_change_pct",
-        "bb_pos", "ema_slope", "spread"
+        "bb_pos", "ema_slope", "spread",
+        # ── post-trade context (9) ───────────────────────────────────
+        "mae", "mfe", "spread_pct", "atr_pct",
+        "distance_support", "distance_resistance",
+        "entry_delay_pct", "coin_category_enc", "leverage",
     ]
-    N_FEATURES = len(FEATURE_NAMES)
+    N_FEATURES      = len(FEATURE_NAMES)
+    N_ENTRY_FEATS   = 16   # slice usata al predict (post-trade = 0.0 al predict)
+
+    # Encode coin_category → float
+    _CAT_ENC = {"highcap": 1.0, "midcap": 0.5, "meme": -0.5, "other": 0.0}
+
+    @staticmethod
+    def encode_coin_category(coin: str) -> float:
+        cat = get_coin_category(coin)
+        return OnlineGBClassifier._CAT_ENC.get(cat, 0.0)
 
     def __init__(self):
-        # Weights: linear model con learning rate decay
         self.weights = np.zeros(self.N_FEATURES)
-        self.bias = 0.0
-        self.lr = 0.05
+        self.bias    = 0.0
+        self.lr      = 0.05
         self.n_samples = 0
         self.feature_means = np.zeros(self.N_FEATURES)
-        self.feature_vars = np.ones(self.N_FEATURES)
-        # Performance tracking
-        self.predictions = deque(maxlen=200)  # (predicted_prob, actual_outcome)
-        self.accuracy_window = deque(maxlen=50)
-
-    def _sigmoid(self, z):
-        z = np.clip(z, -20, 20)
-        return 1.0 / (1.0 + np.exp(-z))
+        self.feature_vars  = np.ones(self.N_FEATURES)
+        # Track rolling expectancy for threshold calibration
+        self.expectancy_window = deque(maxlen=50)
+        self.predictions       = deque(maxlen=200)  # (pred_exp, actual_exp)
 
     def _normalize(self, x):
-        """Running normalization usando media e varianza online."""
         return (x - self.feature_means) / (np.sqrt(self.feature_vars) + 1e-8)
 
     def _update_stats(self, x):
         """Welford's online algorithm per media e varianza."""
         self.n_samples += 1
         n = self.n_samples
-        delta = x - self.feature_means
+        delta  = x - self.feature_means
         self.feature_means += delta / n
         delta2 = x - self.feature_means
         self.feature_vars = ((n - 1) * self.feature_vars + delta * delta2) / n
 
     def predict_proba(self, features):
         """
-        Predict P(win) per il segnale corrente.
-        Returns: float 0.0-1.0
+        Predice trade_expectancy per il segnale corrente.
+        Le feature post-trade non sono disponibili: passa il vettore entry (16)
+        o un vettore N_FEATURES con i post-trade a 0.0.
+        Returns: float (expectancy stimata, tipicamente in [-2, +2])
         """
         if self.n_samples < 10:
-            return 0.5  # non abbastanza dati — default neutral
+            return 0.0  # non abbastanza dati — neutro
 
-        x = np.array(features, dtype=np.float64)
+        # Padding a N_FEATURES se viene passato solo il vettore entry
+        x = np.zeros(self.N_FEATURES, dtype=np.float64)
+        src = np.array(features, dtype=np.float64)
+        x[:len(src)] = src[:self.N_FEATURES]
+
         x_norm = self._normalize(x)
-        z = np.dot(self.weights, x_norm) + self.bias
-        return float(self._sigmoid(z))
+        return float(np.dot(self.weights, x_norm) + self.bias)
 
-    def update(self, features, outcome):
+    def update(self, features, trade_expectancy: float):
         """
-        Online gradient descent step.
-        features: array di N_FEATURES float
-        outcome: 1 (win) o 0 (loss)
+        Online gradient descent step — target continuo (MSE loss).
+        features:         vettore N_FEATURES completo (entry + post-trade).
+        trade_expectancy: pnl_pct / atr_pct, clippato in [-5, +5].
         """
+        target = float(np.clip(trade_expectancy, -5.0, 5.0))
         x = np.array(features, dtype=np.float64)
+        if len(x) < self.N_FEATURES:
+            x = np.pad(x, (0, self.N_FEATURES - len(x)))
+
         self._update_stats(x)
         x_norm = self._normalize(x)
 
-        # Forward pass
-        z = np.dot(self.weights, x_norm) + self.bias
-        pred = self._sigmoid(z)
+        pred  = float(np.dot(self.weights, x_norm) + self.bias)
+        error = pred - target          # MSE gradient
 
-        # Binary cross-entropy gradient
-        error = pred - outcome
-
-        # Learning rate con decay
-        lr = self.lr / (1 + self.n_samples * 0.001)
-
-        # L2 regularization (weight decay)
+        lr  = self.lr / (1 + self.n_samples * 0.001)
         reg = 0.001
 
-        # Update
         self.weights -= lr * (error * x_norm + reg * self.weights)
-        self.bias -= lr * error
+        self.bias    -= lr * error
 
-        # Track accuracy
-        predicted_class = 1 if pred >= 0.5 else 0
-        correct = 1 if predicted_class == outcome else 0
-        self.accuracy_window.append(correct)
-        self.predictions.append((pred, outcome))
+        self.expectancy_window.append(target)
+        self.predictions.append((pred, target))
 
-        # Log periodico
         if self.n_samples % 10 == 0:
-            acc = np.mean(self.accuracy_window) if self.accuracy_window else 0
-            log_btc(f"[ML] Update #{self.n_samples} | Acc:{acc:.0%} | pred:{pred:.2f} actual:{outcome}")
+            mae_w = float(np.mean([abs(p - t) for p, t in self.predictions])) if self.predictions else 0
+            log_btc(f"[ML] Update #{self.n_samples} | pred:{pred:+.3f} actual:{target:+.3f} MAE:{mae_w:.3f}")
 
     def get_accuracy(self):
-        if not self.accuracy_window:
-            return 0.5
-        return float(np.mean(self.accuracy_window))
+        """Restituisce MAE rolling sulle ultime 50 predizioni (scala expectancy)."""
+        if not self.predictions:
+            return 0.0
+        return float(np.mean([abs(p - t) for p, t in self.predictions]))
+
+    def get_mean_expectancy(self):
+        """Media delle expectancy reali nella finestra recente."""
+        if not self.expectancy_window:
+            return 0.0
+        return float(np.mean(self.expectancy_window))
 
     def get_feature_importance(self):
         """Returns feature importance (absolute weight magnitude)."""
@@ -1303,24 +1328,33 @@ class OnlineGBClassifier:
 
     def to_dict(self):
         return {
-            "weights": self.weights.tolist(),
-            "bias": self.bias,
-            "n_samples": self.n_samples,
+            "weights":       self.weights.tolist(),
+            "bias":          self.bias,
+            "n_samples":     self.n_samples,
             "feature_means": self.feature_means.tolist(),
-            "feature_vars": self.feature_vars.tolist(),
-            "lr": self.lr
+            "feature_vars":  self.feature_vars.tolist(),
+            "lr":            self.lr,
         }
 
     def from_dict(self, d):
         if not d:
             return
         try:
-            self.weights = np.array(d["weights"])
-            self.bias = d["bias"]
-            self.n_samples = d["n_samples"]
-            self.feature_means = np.array(d["feature_means"])
-            self.feature_vars = np.array(d["feature_vars"])
-            self.lr = d.get("lr", 0.05)
+            w = np.array(d["weights"])
+            # Compatibilità con modelli salvati a 16 feature — padding a N_FEATURES
+            if len(w) < self.N_FEATURES:
+                w = np.pad(w, (0, self.N_FEATURES - len(w)))
+                fm = np.pad(np.array(d["feature_means"]), (0, self.N_FEATURES - len(d["feature_means"])))
+                fv = np.pad(np.array(d["feature_vars"]),  (0, self.N_FEATURES - len(d["feature_vars"])), constant_values=1.0)
+            else:
+                fm = np.array(d["feature_means"])
+                fv = np.array(d["feature_vars"])
+            self.weights       = w
+            self.bias          = d["bias"]
+            self.n_samples     = d["n_samples"]
+            self.feature_means = fm
+            self.feature_vars  = fv
+            self.lr            = d.get("lr", 0.05)
         except Exception as e:
             log_btc(f"[ML] Load error: {e}")
 
@@ -1333,35 +1367,36 @@ _ml_model_alt = OnlineGBClassifier()
 
 def ml_predict_alt(features):
     """ML filter per ALT: stesse soglie del BTC ma modello separato."""
-    prob = _ml_model_alt.predict_proba(features)
-    acc  = _ml_model_alt.get_accuracy()
-    n    = _ml_model_alt.n_samples
-    info = {"prob": round(prob,3), "acc": round(acc,3), "n_samples": n,
-            "action": "OBSERVE", "block": False}
-    if n >= 30 and acc >= 0.55:
+    exp   = _ml_model_alt.predict_proba(features)
+    mae_w = _ml_model_alt.get_accuracy()
+    n     = _ml_model_alt.n_samples
+    mean_exp = _ml_model_alt.get_mean_expectancy()
+    info  = {"exp": round(exp, 3), "mae": round(mae_w, 3), "n_samples": n,
+             "action": "OBSERVE", "block": False}
+    if n >= 30 and mae_w < 1.5:   # attivo solo se MAE < 1.5 R (modello non troppo rumoroso)
         info["ml_active"] = True
-        if prob < 0.35:
+        if exp < -0.3:             # expectancy fortemente negativa → blocca
             info["action"] = "BLOCK"; info["block"] = True
-        elif prob < 0.45:
+        elif exp < 0.0:            # expectancy leggermente negativa → riduci size
             info["action"] = "SOFT_REDUCE"; info["size_mult"] = 0.6
-        elif prob < 0.50:
+        elif exp < 0.2:            # expectancy marginale
             info["action"] = "SLIGHT_REDUCE"; info["size_mult"] = 0.85
         else:
             info["action"] = "NEUTRAL"; info["size_mult"] = 1.0
-    return prob, info
+    return exp, info
 
-def ml_record_alt_outcome(features, won):
-    """Record outcome per aggiornare il modello ALT."""
-    _ml_model_alt.update(features, 1 if won else 0)
+def ml_record_alt_outcome(features, trade_expectancy: float):
+    """Aggiorna il modello ALT con l'expectancy reale del trade chiuso."""
+    _ml_model_alt.update(features, trade_expectancy)
     if _ml_model_alt.n_samples % 5 == 0:
         _rset("alt:ml_model", _ml_model_alt.to_dict())
-        log_alt(f"[ML-ALT] Saved ({_ml_model_alt.n_samples} samples, acc:{_ml_model_alt.get_accuracy():.0%})")
+        log_alt(f"[ML-ALT] Saved ({_ml_model_alt.n_samples} samples, MAE:{_ml_model_alt.get_accuracy():.3f})")
 
 def ml_load_model_alt():
     d = _rget("alt:ml_model")
     if d:
         _ml_model_alt.from_dict(d)
-        log_alt(f"[ML-ALT] Loaded: {_ml_model_alt.n_samples} samples, acc:{_ml_model_alt.get_accuracy():.0%}")
+        log_alt(f"[ML-ALT] Loaded: {_ml_model_alt.n_samples} samples, MAE:{_ml_model_alt.get_accuracy():.3f}")
 
 def is_valid_coin(coin: str) -> bool:
     """Filtra asset non tradabili: indici interni Hyperliquid (#N, numeri puri), spot (@), k-token."""
@@ -1381,6 +1416,102 @@ def encode_regime(regime):
 
 def encode_mode(mode):
     return {"TREND": 1.0, "RANGE": 0.0, "FLASH": 2.0}.get(mode, 0.0)
+
+def build_complete_ml_features_alt(coin, df_5m, df_15m, df_1h, regime, mode,
+                                    ai_score, funding_z, oi_change, sentiment_score,
+                                    # post-trade fields (None at predict time, filled at update)
+                                    mae=None, mfe=None, spread_pct=None, atr_pct=None,
+                                    distance_support=None, distance_resistance=None,
+                                    entry_delay_pct=None, leverage=None):
+    """
+    Costruisce il vettore completo di N_FEATURES (25) per il classificatore ALT.
+
+    Al momento della predizione (pre-trade) le 9 feature post-trade non sono
+    disponibili: vengono impostate a 0.0 e il modello le ignora (normalizzazione
+    online le porta a zero con varianza ~1).
+
+    Al momento dell'update (post-trade) devono essere passate tutte.
+
+    Feature order → OnlineGBClassifier.FEATURE_NAMES:
+      entry (16): rsi_15m, rsi_1h, macd_hist, adx_1h, vol_rel,
+                  funding_z, sentiment, ob_imbalance, cvd_slope,
+                  regime_enc, mode_enc, setup_score, oi_change_pct,
+                  bb_pos, ema_slope, spread
+      post  (9):  mae, mfe, spread_pct, atr_pct,
+                  distance_support, distance_resistance,
+                  entry_delay_pct, coin_category_enc, leverage
+    """
+    try:
+        r_5m  = df_5m.iloc[-1]
+        r_15m = df_15m.iloc[-1]
+        r_1h  = df_1h.iloc[-1]
+
+        def _f(row, key, default):
+            try:
+                v = row[key] if hasattr(row, '__getitem__') else getattr(row, key, default)
+                return float(v) if v is not None else float(default)
+            except Exception:
+                return float(default)
+
+        rsi_15m   = _f(r_15m, 'rsi',       50)
+        rsi_1h    = _f(r_1h,  'rsi',       50)
+        macd_hist = _f(r_5m,  'macd_hist',  0)
+        adx_1h    = _f(r_1h,  'adx',       20)
+        vol_rel   = _f(r_5m,  'vol_rel',  1.0)
+        bb_pos    = _f(r_5m,  'bb_pos',   0.0)
+        ema_slope = _f(r_5m,  'ema_slope',0.0)
+
+        # OB imbalance + spread live
+        try:
+            px_now = _f(r_5m, 'close', 0)
+            liq = fetch_liquidity_data(coin, px_now) if px_now > 0 else {}
+            ob_imbalance = float(liq.get("imbalance", 0.5))
+            _spread      = float(liq.get("spread_real") or 0.001)
+        except Exception:
+            ob_imbalance = 0.5
+            _spread      = 0.001
+
+        # CVD slope — proxy BTC (market-wide risk-on/off)
+        try:
+            cvd_slope = float(_compute_cvd_trend().get("cvd_slope", 0.0))
+        except Exception:
+            cvd_slope = 0.0
+
+        # ai_score: 0-10 → 0-100 per allinearsi a setup_score
+        ai_score_scaled = float(ai_score) * 10.0 if ai_score is not None else 50.0
+
+        entry_feats = [
+            rsi_15m, rsi_1h, macd_hist, adx_1h, vol_rel,
+            float(funding_z),
+            float(sentiment_score) if sentiment_score is not None else 50.0,
+            ob_imbalance, cvd_slope,
+            encode_regime(regime),
+            encode_mode(mode),
+            ai_score_scaled,
+            float(oi_change),
+            bb_pos, ema_slope, _spread,
+        ]
+
+        # Post-trade features: 0.0 quando non disponibili (predict time)
+        post_feats = [
+            float(mae)                if mae                is not None else 0.0,
+            float(mfe)                if mfe                is not None else 0.0,
+            float(spread_pct)         if spread_pct         is not None else _spread,
+            float(atr_pct)            if atr_pct            is not None else 0.0,
+            float(distance_support)   if distance_support   is not None else 0.0,
+            float(distance_resistance)if distance_resistance is not None else 0.0,
+            float(entry_delay_pct)    if entry_delay_pct    is not None else 0.0,
+            OnlineGBClassifier.encode_coin_category(coin),
+            float(leverage)           if leverage           is not None else float(LEVERAGE_CONFIG.get("TREND", 20)),
+        ]
+
+        return entry_feats + post_feats
+
+    except Exception as e:
+        log_alt(f"[ML-FEAT] build_complete_ml_features_alt error ({coin}): {e} — fallback zeros")
+        return [0.0] * OnlineGBClassifier.N_FEATURES
+
+
 def ml_predict_signal(features):
     """
     ML filter:
@@ -1400,30 +1531,31 @@ def ml_predict_signal(features):
         "block": False,
     }
 
-    if n >= 50 and acc >= 0.55:
+    # acc = MAE rolling; attiva solo se MAE < 1.5 (predizioni non casuali)
+    if n >= 50 and acc < 1.5:
         info["ml_active"] = True
-        if prob < 0.40:
+        if prob < -0.3:
             info["action"] = "BLOCK"
             info["block"] = True
+        elif prob < 0.0:
             info["action"] = "SOFT_REDUCE"
-        elif prob < 0.45:
-            # Sotto media → riduci size del 10%
-            info["size_mult"] = 0.90
+            info["size_mult"] = 0.70
+        elif prob < 0.2:
             info["action"] = "SLIGHT_REDUCE"
+            info["size_mult"] = 0.90
         else:
-            # Probabilità OK o alta → nessuna modifica (mai boosta)
             info["action"] = "NEUTRAL"
             info["size_mult"] = 1.0
 
     return prob, info
 
 
-def ml_record_outcome(features, won):
-    """Record trade outcome per aggiornare il modello online."""
-    _ml_model.update(features, 1 if won else 0)
+def ml_record_outcome(features, trade_expectancy: float):
+    """Aggiorna il modello BTC con la trade_expectancy reale (pnl_pct / atr_pct)."""
+    _ml_model.update(features, trade_expectancy)
     if _ml_model.n_samples % 5 == 0:
         _rset("btc7:ml_model", _ml_model.to_dict())
-        log_btc(f"[ML] Saved ({_ml_model.n_samples} samples, acc:{_ml_model.get_accuracy():.0%})")
+        log_btc(f"[ML] Saved ({_ml_model.n_samples} samples, MAE:{_ml_model.get_accuracy():.3f})")
 
 
 def ml_load_model():
@@ -3325,8 +3457,15 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
             log_btc("❌ get_mid() failed")
             return False
 
+        # ── SPREAD CHECK — skip se spread > 0.15% ──
+        _liq = fetch_liquidity()
+        _spread_pct = _liq.get("spread")
+        if _spread_pct is not None and _spread_pct > 0.0015:
+            log_btc(f"⛔ Spread {_spread_pct:.4%} > 0.15% — trade skippato")
+            return False
+
         px = rpx(mid * (BTC_ENTRY_LONG_MULT if is_long else BTC_ENTRY_SHORT_MULT), px_dec)
-        log_btc(f"{'🟢' if is_long else '🔴'} ORDER {direction} [{scalp_mode}] @ {px} size:{size}")
+        log_btc(f"{'🟢' if is_long else '🔴'} ORDER {direction} [{scalp_mode}] @ {px} size:{size} spread:{_spread_pct:.4%}")
 
 
         res = call(_exchange.order, BTC_COIN, is_long, size, px,
@@ -5754,19 +5893,16 @@ def run_processor():
                 continue
 
             # ── ML ALT FILTER ────────────────────────────────────────
-            ml_alt_features = [
-                rsi, float(df.iloc[-1].get('rsi', 50) if hasattr(df.iloc[-1], 'get') else 50),
-                float(df.iloc[-1].get('macd_hist', 0) if hasattr(df.iloc[-1], 'get') else 0),
-                float(df.iloc[-1].get('adx', 20) if hasattr(df.iloc[-1], 'get') else 20),
-                vol_rel, funding_z, 50.0,
-                liq_data.get("imbalance", 0.5) if liq_data else 0.5,
-                0.0,  # cvd_slope placeholder
-                encode_regime(regime),
-                encode_mode(candidate.get("mode", "SCALPING")),
-                float(ai_score), 0.0, bb_pos,
-                float(df.iloc[-1].get('ema_slope', 0) if hasattr(df.iloc[-1], 'get') else 0),
-                spread_pct
-            ]
+            _sentiment_now = get_sentiment_score()
+            ml_alt_features = build_complete_ml_features_alt(
+                coin, df_5m, df_15m, df_1h,
+                regime,
+                candidate.get("mode", "SCALPING"),
+                ai_score,
+                funding_z,
+                oi_change,
+                _sentiment_now,
+            )
             ml_alt_prob, ml_alt_info = ml_predict_alt(ml_alt_features)
             if ml_alt_info.get("block"):
                 log_alt(f"[{coin}] 🤖 ML-ALT BLOCK: P(win)={ml_alt_prob:.0%} acc:{ml_alt_info['acc']:.0%} — skip")
@@ -6456,6 +6592,14 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         # ── MARGIN CHECK (from V7) ──
         if not check_margin_ok(coin, size_nominal, entry_px, lev=actual_lev):
             return False
+
+        # ── SPREAD CHECK — skip se spread > 0.15% ──
+        _liq_alt = fetch_liquidity_data(coin, entry_px)
+        _spread_pct_alt = _liq_alt.get("spread_real")
+        if _spread_pct_alt is not None and _spread_pct_alt > 0.0015:
+            log_exec(f"[{coin}] ⛔ Spread {_spread_pct_alt:.4%} > 0.15% — trade skippato")
+            return False
+        log_exec(f"[{coin}] 📊 Spread ok: {(_spread_pct_alt or 0):.4%}")
 
         # ── GTC MAKER → IoC TAKER (from V7) ──
         scalp_mode = signal.get("scalp_mode", "TREND")
@@ -7469,10 +7613,21 @@ def executor_thread_alt():
                     log_exec(f"[{coin}] {emoji} Trade chiuso — {outcome} | PnL:{pnl_pct*100:+.2f}%")
                     tg(f"{emoji} <b>{coin}</b> [{direction}] chiuso — {outcome.upper()} | PnL: {pnl_pct*100:+.2f}%", silent=True)
 
-                    # ── ML ALT: aggiorna modello con outcome reale ──
+                    # ── ML ALT: aggiorna modello con trade_expectancy reale ──
                     ml_feats_alt = meta.get("ml_alt_features", [])
                     if ml_feats_alt and len(ml_feats_alt) == OnlineGBClassifier.N_FEATURES:
-                        ml_record_alt_outcome(ml_feats_alt, outcome == "win")
+                        _atr_a   = meta.get("atr", 0)
+                        _entr_a  = meta.get("entry_px", meta.get("entry", 0))
+                        _atr_pa  = (_atr_a / _entr_a) if _entr_a > 0 and _atr_a > 0 else 0.01
+                        _exp_a   = pnl_pct / _atr_pa   # pnl_pct è già ratio (non %)
+                        _ffa     = list(ml_feats_alt)
+                        if len(_ffa) == OnlineGBClassifier.N_FEATURES:
+                            _ffa[16] = meta.get("worst_pnl", 0.0)   # mae
+                            _ffa[17] = meta.get("peak_pnl",  0.0)   # mfe
+                            _ffa[19] = _atr_pa                       # atr_pct
+                            _ffa[23] = OnlineGBClassifier.encode_coin_category(coin)
+                            _ffa[24] = float(meta.get("effective_leverage", LEVERAGE_CONFIG.get("TREND", 20)))
+                        ml_record_alt_outcome(_ffa, _exp_a)
 
                     # ── ADAPTIVE PARAMS ALT: aggiorna MFE/MAE stats per coin ──
                     _update_adaptive_params_alt(coin, pnl_pct, meta.get("peak_pnl", 0), meta.get("worst_pnl", 0))
@@ -8053,10 +8208,20 @@ def btc_executor_loop(sz_dec, px_dec):
                     log_btc(f"⏸️ Loss — sleeping {BTC_COOLDOWN_AFTER_LOSS}s")
                     time.sleep(BTC_COOLDOWN_AFTER_LOSS)
 
-                # ML online learning
+                # ML online learning — target: trade_expectancy = pnl_pct / atr_pct
                 ml_feats = last_pos_state.get("ml_features", [])
                 if ml_feats and len(ml_feats) == OnlineGBClassifier.N_FEATURES:
-                    ml_record_outcome(ml_feats, pnl_usd > 0)
+                    _atr_ref = last_pos_state.get("atr", 0)
+                    _atr_pct_ref = (_atr_ref / entry) if entry > 0 and _atr_ref > 0 else 0.01
+                    _expectancy = (pnl_pct / 100.0) / _atr_pct_ref
+                    _full_feats = list(ml_feats)
+                    if len(_full_feats) == OnlineGBClassifier.N_FEATURES:
+                        _full_feats[16] = last_pos_state.get("worst_pnl", 0.0)  # mae
+                        _full_feats[17] = last_pos_state.get("peak_pnl",  0.0)  # mfe
+                        _full_feats[19] = _atr_pct_ref                           # atr_pct
+                        _full_feats[23] = OnlineGBClassifier.encode_coin_category(BTC_COIN)
+                        _full_feats[24] = float(last_pos_state.get("leverage", LEVERAGE_CONFIG.get("TREND", 20)))
+                    ml_record_outcome(_full_feats, _expectancy)
 
                 last_pos_state = None
 
@@ -8160,7 +8325,17 @@ def btc_executor_loop(sz_dec, px_dec):
 
                     ml_feats = last_pos_state.get("ml_features", [])
                     if ml_feats and len(ml_feats) == OnlineGBClassifier.N_FEATURES:
-                        ml_record_outcome(ml_feats, pnl_usd > 0)
+                        _atr_r2  = last_pos_state.get("atr", 0)
+                        _atr_p2  = (_atr_r2 / entry) if entry > 0 and _atr_r2 > 0 else 0.01
+                        _exp2    = (pnl_real / 100.0) / _atr_p2
+                        _ff2     = list(ml_feats)
+                        if len(_ff2) == OnlineGBClassifier.N_FEATURES:
+                            _ff2[16] = last_pos_state.get("worst_pnl", 0.0)
+                            _ff2[17] = last_pos_state.get("peak_pnl",  0.0)
+                            _ff2[19] = _atr_p2
+                            _ff2[23] = OnlineGBClassifier.encode_coin_category(BTC_COIN)
+                            _ff2[24] = float(last_pos_state.get("leverage", LEVERAGE_CONFIG.get("TREND", 20)))
+                        ml_record_outcome(_ff2, _exp2)
 
                     last_pos_state = None
 
