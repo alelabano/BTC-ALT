@@ -92,20 +92,21 @@ def compute_tp_sl_pct(leverage: int):
     return ROE_TP / lev, ROE_SL / lev
 
 # Valori statici per compatibilità con il codice che li legge prima del trade.
-# Usano la leva del regime TREND (10x) come riferimento conservativo.
-TP_PRICE_PCT = ROE_TP / LEVERAGE_CONFIG.get("TREND", 10)   # 0.010
-SL_PRICE_PCT = ROE_SL / LEVERAGE_CONFIG.get("TREND", 10)   # 0.005
+# LEVERAGE_CONFIG è definito più avanti (riga ~187); qui usiamo i valori letterali
+# per evitare NameError. Leva di riferimento: TREND=20, RANGE=15, FLASH=10.
+TP_PRICE_PCT = ROE_TP / 20   # TREND 20x → 0.005
+SL_PRICE_PCT = ROE_SL / 20   # TREND 20x → 0.0025
 
-# Per RANGE (15x): TP=0.0067, SL=0.0033
-# Per FLASH (20x): TP=0.005,  SL=0.0025
+# Per RANGE (15x): TP=0.00667, SL=0.00333
+# Per FLASH (10x): TP=0.010,   SL=0.005
 # I valori effettivi vengono calcolati con compute_tp_sl_pct(selected_leverage) al momento dell'entry.
 
-RANGE_SL_ATR = 1.2; RANGE_TP_PCT = ROE_TP / LEVERAGE_CONFIG.get("RANGE", 15)
+RANGE_SL_ATR = 1.2; RANGE_TP_PCT = ROE_TP / 15   # RANGE 15x → 0.00667
 RANGE_SL_MIN = 0.003; RANGE_SL_MAX = 0.006  # 0.3% - 0.6%
 TREND_SL_ATR = 1.2; TREND_TP_RR = 1.5  # R:R 1:1.5
 TREND_SL_MIN = 0.004; TREND_SL_MAX = 0.008
 TREND_TRAIL_ATR = 0.7; TREND_PARTIAL = 0.4
-FLASH_SL_ATR = 1.0; FLASH_TP_PCT = ROE_TP / LEVERAGE_CONFIG.get("FLASH", 10)
+FLASH_SL_ATR = 1.0; FLASH_TP_PCT = ROE_TP / 10   # FLASH 10x → 0.010
 FLASH_SL_MIN = 0.002; FLASH_SL_MAX = 0.004  # 0.2% - 0.4% (flash = più stretto)
 FLASH_TRAILING = False; FLASH_USE_IOC = True
 
