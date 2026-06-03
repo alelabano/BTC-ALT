@@ -1,6 +1,5 @@
 """
 unified_bot.py — BTC Scalper V7 + Altcoin Processor in un singolo container.
-Versione: bot-5-fixed (correzioni leva dinamica)
 
 ARCHITETTURA (4 thread):
   Thread A — BTC_SCANNER:  regime 4h + backtest + V7 analytics ogni 5 min
@@ -15,17 +14,6 @@ V7 MODULES (shared):
 
 BTC MODES: RANGE (ADX<20) | TREND (ADX>25) | FLASH (vol>3x)
 ALT MODES: Mean Reversion + Trend Following + Scalping
-
-LEVA DINAMICA (corretta):
-  - analyze_market_for_leverage() → score composito → LEV_LOW=10 | LEV_NORMAL=15 | LEV_HIGH=20
-  - Cap regime: LEVERAGE_CONFIG = {RANGE: 15, TREND: 20, FLASH: 10}
-  - Ordine applicazione: min(score_lev, regime_cap) → poi check max_exchange
-  - tune_leverage_for_profit_target() riceve regime_cap (non max_exchange) → non buca il cap
-  - TP_PRICE_PCT / SL_PRICE_PCT calcolati per leva del regime TREND (10x) come riferimento
-  - Per leva effettiva runtime: compute_tp_sl_pct(selected_leverage) → (tp_pct, sl_pct)
-  - LEVERAGE_OPTIONS = [10, 15, 20] allineato a LEV_LOW/NORMAL/HIGH (rimosso 5x)
-
-SIZE: margin=$1.20 × leva → notional (floor MIN_NOTIONAL_USD=$10, isolated margin)
 
 Fleet system: INTERNO (no più Redis cross-worker).
 BTC engine genera regime/bias → ALT engine lo legge in-memory.
@@ -78,35 +66,19 @@ BTC_SCAN_INTERVAL = 5
 BTC_SIGNAL_MAX_AGE = 30
 BTC_REGIME_INTERVAL = 300
 
-# ROE-based SL/TP — calcolati dinamicamente per regime con leva effettiva
-# BTC_LEVERAGE NON viene più usato per TP_PRICE_PCT / SL_PRICE_PCT statici.
-# I target price-pct sono calcolati al momento del trade tramite compute_tp_sl_pct().
-ALT_LEVERAGE = 10   # default leva ALT (sovrascritta da analyze_market_for_leverage)
-ROE_TP = 0.10; ROE_SL = 0.05
+# ROE-based SL/TP — SL
+BTC_LEVERAGE = 10   # default value, not used for live trading (dynamic leverage used)
+ALT_LEVERAGE = 10
+ROE_TP = 0.10; ROE_SL = 0.05  
+TP_PRICE_PCT = ROE_TP / BTC_LEVERAGE  # 0.003 = 0.3%
+SL_PRICE_PCT = ROE_SL / BTC_LEVERAGE  # 0.003 = 0.3%
 
-# TP/SL price-pct per regime — calcolati con la leva cap del regime stesso.
-# Questo garantisce coerenza tra leva effettiva e distanze target.
-def compute_tp_sl_pct(leverage: int):
-    """Ritorna (tp_pct, sl_pct) price-based coerenti con la leva effettiva."""
-    lev = max(1, leverage)
-    return ROE_TP / lev, ROE_SL / lev
-
-# Valori statici per compatibilità con il codice che li legge prima del trade.
-# LEVERAGE_CONFIG è definito più avanti (riga ~187); qui usiamo i valori letterali
-# per evitare NameError. Leva di riferimento: TREND=20, RANGE=15, FLASH=10.
-TP_PRICE_PCT = ROE_TP / 20   # TREND 20x → 0.005
-SL_PRICE_PCT = ROE_SL / 20   # TREND 20x → 0.0025
-
-# Per RANGE (15x): TP=0.00667, SL=0.00333
-# Per FLASH (10x): TP=0.010,   SL=0.005
-# I valori effettivi vengono calcolati con compute_tp_sl_pct(selected_leverage) al momento dell'entry.
-
-RANGE_SL_ATR = 1.2; RANGE_TP_PCT = ROE_TP / 15   # RANGE 15x → 0.00667
+RANGE_SL_ATR = 1.2; RANGE_TP_PCT = TP_PRICE_PCT
 RANGE_SL_MIN = 0.003; RANGE_SL_MAX = 0.006  # 0.3% - 0.6%
 TREND_SL_ATR = 1.2; TREND_TP_RR = 1.5  # R:R 1:1.5
 TREND_SL_MIN = 0.004; TREND_SL_MAX = 0.008
 TREND_TRAIL_ATR = 0.7; TREND_PARTIAL = 0.4
-FLASH_SL_ATR = 1.0; FLASH_TP_PCT = ROE_TP / 10   # FLASH 10x → 0.010
+FLASH_SL_ATR = 1.0; FLASH_TP_PCT = TP_PRICE_PCT
 FLASH_SL_MIN = 0.002; FLASH_SL_MAX = 0.004  # 0.2% - 0.4% (flash = più stretto)
 FLASH_TRAILING = False; FLASH_USE_IOC = True
 
@@ -149,7 +121,7 @@ MIN_VOLUME_24H_USD = 200_000; MIN_VOLUME_TREND_MULT = 1.8
 FORWARD_WINDOW = 36
 MIN_PRECISION = 0.35; MIN_PRECISION_FLOOR = 0.28
 MIN_PROFIT_FACTOR = 1.35; MIN_PROFIT_FACTOR_FLOOR = 1.20
-MIN_BACKTEST_TRADES = 12; VOLATILITY_MIN = 0.0015
+MIN_BACKTEST_TRADES = 20; VOLATILITY_MIN = 0.0015
 DEFAULT_CAPITAL = float(os.getenv("ACCOUNT_CAPITAL_USD", "1000"))
 API_TIMEOUT_SEC = 2; PROCESSOR_INTERVAL = 1 * 30
 ALT_FUNDING_HISTORY_LEN = 42
@@ -158,10 +130,10 @@ MOMENTUM_MULT_ALT = 1.2
 CONFIRMATION_SECONDS_ALT = 30    # Tempo per confermare la bontà dell'entry
 
 # ── Unified Executor Config ─────────────────────────────────────
-ALT_MAX_CONCURRENT = 9         # max altcoin positions
+ALT_MAX_CONCURRENT = 4         # max altcoin positions
 ALT_TRADE_SIZE_USD = 1.2       # margine per trade ALT — notional = ALT_TRADE_SIZE_USD × leva effettiva
 ALT_CHECK_INTERVAL = 2
-ALT_SIGNAL_MAX_AGE = 5 * 60
+ALT_SIGNAL_MAX_AGE = 3 * 60
 SIGNAL_MAX_AGE = ALT_SIGNAL_MAX_AGE
 META_REFRESH_CYCLES = 2
 ENTRY_POLL_ATTEMPTS = 2; ENTRY_POLL_INTERVAL = 0.2
@@ -173,7 +145,7 @@ PROCESSOR_MAX_COINS = 30
 CORRELATION_THRESHOLD = 0.55
 MIN_NOTIONAL_USD = 10.0          # Hyperliquid minimo assoluto
 BASE_MARGIN_USD = 1.2            # Margine base per trade ($1)
-LEVERAGE_OPTIONS = [10, 15, 20]  # allineato a LEV_LOW / LEV_NORMAL / LEV_HIGH
+LEVERAGE_OPTIONS = [5, 10, 15]
 BTC_BASE_MARGIN = 1.2
 ALT_MARGIN_PCT = 0.2
 _optimal_leverage_cache = {"btc": {"lev": 10, "ts": 0, "reasoning": ""}, "alt": {}}
@@ -185,7 +157,6 @@ TARGET_PROFIT_FEE_PCT = float(os.getenv("TARGET_PROFIT_FEE_PCT", "0.001"))  # bu
 # Modifica qui: il codice sotto deve leggere queste soglie, non numeri sparsi.
 LEVERAGE_MIN = 3
 ALT_MAX_LEVERAGE = 20
-LEVERAGE_CONFIG = {"RANGE": 15, "TREND": 20, "FLASH": 10}  # cap leva per scalp_mode
 SIZE_MULT_MIN = 0.01
 PRICE_ROUND_MAX_DECIMALS = 10
 PRICE_ROUND_FALLBACK_DECIMALS = 6
@@ -221,7 +192,7 @@ BTC_SIGNAL_TP2_MIN_PCT = 0.005
 BTC_RECOVERED_SL_DIST_PCT = 0.012
 BTC_SL_ATR_REVERSE_MULT = 1.2
 
-ALT_DRIFT_ENTRY_LATE_PCT = 0.025
+ALT_DRIFT_ENTRY_LATE_PCT = 0.02
 ALT_DRIFT_INVALIDATE_PCT = 0.015
 ALT_DRIFT_REPRICE_PCT = 0.002
 ALT_DEFAULT_RR = 1.1
@@ -330,7 +301,7 @@ ENTRY_RANGE_LONG_MAX_POS = 0.28
 ENTRY_RANGE_SHORT_MIN_POS = 0.72
 ENTRY_MIN_CONFLUENCE = 4
 ENTRY_CANDIDATE_MAX_AGE_MULT = 4
-ENTRY_SKIP_DOUBLE_CONFIRM_PF = 1.15
+ENTRY_SKIP_DOUBLE_CONFIRM_PF = 1.20
 PROCESSOR_BTC_STRONG_MOM_1H = 0.003
 PROCESSOR_BTC_STRONG_MOM_4H = 0.002
 PROCESSOR_SLOPE_4H_BLOCK = 0.002
@@ -1193,128 +1164,103 @@ def get_flow_signal():
 
 class OnlineGBClassifier:
     """
-    Regressore SGD online — predice trade_expectancy (pnl_pct normalizzato).
-    Target: trade_expectancy = pnl_pct / atr_pct  (R-multiple, clippato ±5)
-      > 0  → trade profittevole (guadagno in unità di ATR)
-      < 0  → trade perdente
-      = 0  → break-even
-    Il predittore stima l'expectancy attesa; la soglia di blocco è su 0.0.
-
-    Features (25):
-      Entry context (16): rsi_15m, rsi_1h, macd_hist, adx_1h, vol_rel,
-                          funding_z, sentiment, ob_imbalance, cvd_slope,
-                          regime_enc, mode_enc, setup_score, oi_change_pct,
-                          bb_pos, ema_slope, spread
-      Post-trade (9):     mae, mfe, spread_pct, atr_pct,
-                          distance_support, distance_resistance,
-                          entry_delay_pct, coin_category_enc, leverage
-    Le feature post-trade sono disponibili solo all'update (dopo chiusura);
-    al predict vengono passate come 0.0 (vengono normalizzate online).
+    Mini gradient boosting binario online — pesi aggiornati ad ogni sample.
+    Features: RSI, MACD, ADX, vol, funding_z, sentiment, OB_imbalance, CVD,
+              regime_encoded, scalp_mode_encoded, setup_score, oi_change.
+    Target: 1 = trade vincente, 0 = perdente.
     """
     FEATURE_NAMES = [
-        # ── entry context (16) ──────────────────────────────────────
         "rsi_15m", "rsi_1h", "macd_hist", "adx_1h", "vol_rel",
         "funding_z", "sentiment", "ob_imbalance", "cvd_slope",
         "regime_enc", "mode_enc", "setup_score", "oi_change_pct",
-        "bb_pos", "ema_slope", "spread",
-        # ── post-trade context (9) ───────────────────────────────────
-        "mae", "mfe", "spread_pct", "atr_pct",
-        "distance_support", "distance_resistance",
-        "entry_delay_pct", "coin_category_enc", "leverage",
+        "bb_pos", "ema_slope", "spread"
     ]
-    N_FEATURES      = len(FEATURE_NAMES)
-    N_ENTRY_FEATS   = 16   # slice usata al predict (post-trade = 0.0 al predict)
-
-    # Encode coin_category → float
-    _CAT_ENC = {"highcap": 1.0, "midcap": 0.5, "meme": -0.5, "other": 0.0}
-
-    @staticmethod
-    def encode_coin_category(coin: str) -> float:
-        cat = get_coin_category(coin)
-        return OnlineGBClassifier._CAT_ENC.get(cat, 0.0)
+    N_FEATURES = len(FEATURE_NAMES)
 
     def __init__(self):
+        # Weights: linear model con learning rate decay
         self.weights = np.zeros(self.N_FEATURES)
-        self.bias    = 0.0
-        self.lr      = 0.05
+        self.bias = 0.0
+        self.lr = 0.05
         self.n_samples = 0
         self.feature_means = np.zeros(self.N_FEATURES)
-        self.feature_vars  = np.ones(self.N_FEATURES)
-        # Track rolling expectancy for threshold calibration
-        self.expectancy_window = deque(maxlen=50)
-        self.predictions       = deque(maxlen=200)  # (pred_exp, actual_exp)
+        self.feature_vars = np.ones(self.N_FEATURES)
+        # Performance tracking
+        self.predictions = deque(maxlen=200)  # (predicted_prob, actual_outcome)
+        self.accuracy_window = deque(maxlen=50)
+
+    def _sigmoid(self, z):
+        z = np.clip(z, -20, 20)
+        return 1.0 / (1.0 + np.exp(-z))
 
     def _normalize(self, x):
+        """Running normalization usando media e varianza online."""
         return (x - self.feature_means) / (np.sqrt(self.feature_vars) + 1e-8)
 
     def _update_stats(self, x):
         """Welford's online algorithm per media e varianza."""
         self.n_samples += 1
         n = self.n_samples
-        delta  = x - self.feature_means
+        delta = x - self.feature_means
         self.feature_means += delta / n
         delta2 = x - self.feature_means
         self.feature_vars = ((n - 1) * self.feature_vars + delta * delta2) / n
 
     def predict_proba(self, features):
         """
-        Predice trade_expectancy per il segnale corrente.
-        Le feature post-trade non sono disponibili: passa il vettore entry (16)
-        o un vettore N_FEATURES con i post-trade a 0.0.
-        Returns: float (expectancy stimata, tipicamente in [-2, +2])
+        Predict P(win) per il segnale corrente.
+        Returns: float 0.0-1.0
         """
         if self.n_samples < 10:
-            return 0.0  # non abbastanza dati — neutro
+            return 0.5  # non abbastanza dati — default neutral
 
-        # Padding a N_FEATURES se viene passato solo il vettore entry
-        x = np.zeros(self.N_FEATURES, dtype=np.float64)
-        src = np.array(features, dtype=np.float64)
-        x[:len(src)] = src[:self.N_FEATURES]
-
-        x_norm = self._normalize(x)
-        return float(np.dot(self.weights, x_norm) + self.bias)
-
-    def update(self, features, trade_expectancy: float):
-        """
-        Online gradient descent step — target continuo (MSE loss).
-        features:         vettore N_FEATURES completo (entry + post-trade).
-        trade_expectancy: pnl_pct / atr_pct, clippato in [-5, +5].
-        """
-        target = float(np.clip(trade_expectancy, -5.0, 5.0))
         x = np.array(features, dtype=np.float64)
-        if len(x) < self.N_FEATURES:
-            x = np.pad(x, (0, self.N_FEATURES - len(x)))
+        x_norm = self._normalize(x)
+        z = np.dot(self.weights, x_norm) + self.bias
+        return float(self._sigmoid(z))
 
+    def update(self, features, outcome):
+        """
+        Online gradient descent step.
+        features: array di N_FEATURES float
+        outcome: 1 (win) o 0 (loss)
+        """
+        x = np.array(features, dtype=np.float64)
         self._update_stats(x)
         x_norm = self._normalize(x)
 
-        pred  = float(np.dot(self.weights, x_norm) + self.bias)
-        error = pred - target          # MSE gradient
+        # Forward pass
+        z = np.dot(self.weights, x_norm) + self.bias
+        pred = self._sigmoid(z)
 
-        lr  = self.lr / (1 + self.n_samples * 0.001)
+        # Binary cross-entropy gradient
+        error = pred - outcome
+
+        # Learning rate con decay
+        lr = self.lr / (1 + self.n_samples * 0.001)
+
+        # L2 regularization (weight decay)
         reg = 0.001
 
+        # Update
         self.weights -= lr * (error * x_norm + reg * self.weights)
-        self.bias    -= lr * error
+        self.bias -= lr * error
 
-        self.expectancy_window.append(target)
-        self.predictions.append((pred, target))
+        # Track accuracy
+        predicted_class = 1 if pred >= 0.5 else 0
+        correct = 1 if predicted_class == outcome else 0
+        self.accuracy_window.append(correct)
+        self.predictions.append((pred, outcome))
 
+        # Log periodico
         if self.n_samples % 10 == 0:
-            mae_w = float(np.mean([abs(p - t) for p, t in self.predictions])) if self.predictions else 0
-            log_btc(f"[ML] Update #{self.n_samples} | pred:{pred:+.3f} actual:{target:+.3f} MAE:{mae_w:.3f}")
+            acc = np.mean(self.accuracy_window) if self.accuracy_window else 0
+            log_btc(f"[ML] Update #{self.n_samples} | Acc:{acc:.0%} | pred:{pred:.2f} actual:{outcome}")
 
     def get_accuracy(self):
-        """Restituisce MAE rolling sulle ultime 50 predizioni (scala expectancy)."""
-        if not self.predictions:
-            return 0.0
-        return float(np.mean([abs(p - t) for p, t in self.predictions]))
-
-    def get_mean_expectancy(self):
-        """Media delle expectancy reali nella finestra recente."""
-        if not self.expectancy_window:
-            return 0.0
-        return float(np.mean(self.expectancy_window))
+        if not self.accuracy_window:
+            return 0.5
+        return float(np.mean(self.accuracy_window))
 
     def get_feature_importance(self):
         """Returns feature importance (absolute weight magnitude)."""
@@ -1329,33 +1275,24 @@ class OnlineGBClassifier:
 
     def to_dict(self):
         return {
-            "weights":       self.weights.tolist(),
-            "bias":          self.bias,
-            "n_samples":     self.n_samples,
+            "weights": self.weights.tolist(),
+            "bias": self.bias,
+            "n_samples": self.n_samples,
             "feature_means": self.feature_means.tolist(),
-            "feature_vars":  self.feature_vars.tolist(),
-            "lr":            self.lr,
+            "feature_vars": self.feature_vars.tolist(),
+            "lr": self.lr
         }
 
     def from_dict(self, d):
         if not d:
             return
         try:
-            w = np.array(d["weights"])
-            # Compatibilità con modelli salvati a 16 feature — padding a N_FEATURES
-            if len(w) < self.N_FEATURES:
-                w = np.pad(w, (0, self.N_FEATURES - len(w)))
-                fm = np.pad(np.array(d["feature_means"]), (0, self.N_FEATURES - len(d["feature_means"])))
-                fv = np.pad(np.array(d["feature_vars"]),  (0, self.N_FEATURES - len(d["feature_vars"])), constant_values=1.0)
-            else:
-                fm = np.array(d["feature_means"])
-                fv = np.array(d["feature_vars"])
-            self.weights       = w
-            self.bias          = d["bias"]
-            self.n_samples     = d["n_samples"]
-            self.feature_means = fm
-            self.feature_vars  = fv
-            self.lr            = d.get("lr", 0.05)
+            self.weights = np.array(d["weights"])
+            self.bias = d["bias"]
+            self.n_samples = d["n_samples"]
+            self.feature_means = np.array(d["feature_means"])
+            self.feature_vars = np.array(d["feature_vars"])
+            self.lr = d.get("lr", 0.05)
         except Exception as e:
             log_btc(f"[ML] Load error: {e}")
 
@@ -1368,36 +1305,35 @@ _ml_model_alt = OnlineGBClassifier()
 
 def ml_predict_alt(features):
     """ML filter per ALT: stesse soglie del BTC ma modello separato."""
-    exp   = _ml_model_alt.predict_proba(features)
-    mae_w = _ml_model_alt.get_accuracy()
-    n     = _ml_model_alt.n_samples
-    mean_exp = _ml_model_alt.get_mean_expectancy()
-    info  = {"exp": round(exp, 3), "mae": round(mae_w, 3), "n_samples": n,
-             "action": "OBSERVE", "block": False}
-    if n >= 30 and mae_w < 1.5:   # attivo solo se MAE < 1.5 R (modello non troppo rumoroso)
+    prob = _ml_model_alt.predict_proba(features)
+    acc  = _ml_model_alt.get_accuracy()
+    n    = _ml_model_alt.n_samples
+    info = {"prob": round(prob,3), "acc": round(acc,3), "n_samples": n,
+            "action": "OBSERVE", "block": False}
+    if n >= 30 and acc >= 0.55:
         info["ml_active"] = True
-        if exp < -0.3:             # expectancy fortemente negativa → blocca
+        if prob < 0.35:
             info["action"] = "BLOCK"; info["block"] = True
-        elif exp < 0.0:            # expectancy leggermente negativa → riduci size
+        elif prob < 0.45:
             info["action"] = "SOFT_REDUCE"; info["size_mult"] = 0.6
-        elif exp < 0.2:            # expectancy marginale
+        elif prob < 0.50:
             info["action"] = "SLIGHT_REDUCE"; info["size_mult"] = 0.85
         else:
             info["action"] = "NEUTRAL"; info["size_mult"] = 1.0
-    return exp, info
+    return prob, info
 
-def ml_record_alt_outcome(features, trade_expectancy: float):
-    """Aggiorna il modello ALT con l'expectancy reale del trade chiuso."""
-    _ml_model_alt.update(features, trade_expectancy)
+def ml_record_alt_outcome(features, won):
+    """Record outcome per aggiornare il modello ALT."""
+    _ml_model_alt.update(features, 1 if won else 0)
     if _ml_model_alt.n_samples % 5 == 0:
         _rset("alt:ml_model", _ml_model_alt.to_dict())
-        log_alt(f"[ML-ALT] Saved ({_ml_model_alt.n_samples} samples, MAE:{_ml_model_alt.get_accuracy():.3f})")
+        log_alt(f"[ML-ALT] Saved ({_ml_model_alt.n_samples} samples, acc:{_ml_model_alt.get_accuracy():.0%})")
 
 def ml_load_model_alt():
     d = _rget("alt:ml_model")
     if d:
         _ml_model_alt.from_dict(d)
-        log_alt(f"[ML-ALT] Loaded: {_ml_model_alt.n_samples} samples, MAE:{_ml_model_alt.get_accuracy():.3f}")
+        log_alt(f"[ML-ALT] Loaded: {_ml_model_alt.n_samples} samples, acc:{_ml_model_alt.get_accuracy():.0%}")
 
 def is_valid_coin(coin: str) -> bool:
     """Filtra asset non tradabili: indici interni Hyperliquid (#N, numeri puri), spot (@), k-token."""
@@ -1417,102 +1353,6 @@ def encode_regime(regime):
 
 def encode_mode(mode):
     return {"TREND": 1.0, "RANGE": 0.0, "FLASH": 2.0}.get(mode, 0.0)
-
-def build_complete_ml_features_alt(coin, df_5m, df_15m, df_1h, regime, mode,
-                                    ai_score, funding_z, oi_change, sentiment_score,
-                                    # post-trade fields (None at predict time, filled at update)
-                                    mae=None, mfe=None, spread_pct=None, atr_pct=None,
-                                    distance_support=None, distance_resistance=None,
-                                    entry_delay_pct=None, leverage=None):
-    """
-    Costruisce il vettore completo di N_FEATURES (25) per il classificatore ALT.
-
-    Al momento della predizione (pre-trade) le 9 feature post-trade non sono
-    disponibili: vengono impostate a 0.0 e il modello le ignora (normalizzazione
-    online le porta a zero con varianza ~1).
-
-    Al momento dell'update (post-trade) devono essere passate tutte.
-
-    Feature order → OnlineGBClassifier.FEATURE_NAMES:
-      entry (16): rsi_15m, rsi_1h, macd_hist, adx_1h, vol_rel,
-                  funding_z, sentiment, ob_imbalance, cvd_slope,
-                  regime_enc, mode_enc, setup_score, oi_change_pct,
-                  bb_pos, ema_slope, spread
-      post  (9):  mae, mfe, spread_pct, atr_pct,
-                  distance_support, distance_resistance,
-                  entry_delay_pct, coin_category_enc, leverage
-    """
-    try:
-        r_5m  = df_5m.iloc[-1]
-        r_15m = df_15m.iloc[-1]
-        r_1h  = df_1h.iloc[-1]
-
-        def _f(row, key, default):
-            try:
-                v = row[key] if hasattr(row, '__getitem__') else getattr(row, key, default)
-                return float(v) if v is not None else float(default)
-            except Exception:
-                return float(default)
-
-        rsi_15m   = _f(r_15m, 'rsi',       50)
-        rsi_1h    = _f(r_1h,  'rsi',       50)
-        macd_hist = _f(r_5m,  'macd_hist',  0)
-        adx_1h    = _f(r_1h,  'adx',       20)
-        vol_rel   = _f(r_5m,  'vol_rel',  1.0)
-        bb_pos    = _f(r_5m,  'bb_pos',   0.0)
-        ema_slope = _f(r_5m,  'ema_slope',0.0)
-
-        # OB imbalance + spread live
-        try:
-            px_now = _f(r_5m, 'close', 0)
-            liq = fetch_liquidity_data(coin, px_now) if px_now > 0 else {}
-            ob_imbalance = float(liq.get("imbalance", 0.5))
-            _spread      = float(liq.get("spread_real") or 0.001)
-        except Exception:
-            ob_imbalance = 0.5
-            _spread      = 0.001
-
-        # CVD slope — proxy BTC (market-wide risk-on/off)
-        try:
-            cvd_slope = float(_compute_cvd_trend().get("cvd_slope", 0.0))
-        except Exception:
-            cvd_slope = 0.0
-
-        # ai_score: 0-10 → 0-100 per allinearsi a setup_score
-        ai_score_scaled = float(ai_score) * 10.0 if ai_score is not None else 50.0
-
-        entry_feats = [
-            rsi_15m, rsi_1h, macd_hist, adx_1h, vol_rel,
-            float(funding_z),
-            float(sentiment_score) if sentiment_score is not None else 50.0,
-            ob_imbalance, cvd_slope,
-            encode_regime(regime),
-            encode_mode(mode),
-            ai_score_scaled,
-            float(oi_change),
-            bb_pos, ema_slope, _spread,
-        ]
-
-        # Post-trade features: 0.0 quando non disponibili (predict time)
-        post_feats = [
-            float(mae)                if mae                is not None else 0.0,
-            float(mfe)                if mfe                is not None else 0.0,
-            float(spread_pct)         if spread_pct         is not None else _spread,
-            float(atr_pct)            if atr_pct            is not None else 0.0,
-            float(distance_support)   if distance_support   is not None else 0.0,
-            float(distance_resistance)if distance_resistance is not None else 0.0,
-            float(entry_delay_pct)    if entry_delay_pct    is not None else 0.0,
-            OnlineGBClassifier.encode_coin_category(coin),
-            float(leverage)           if leverage           is not None else float(LEVERAGE_CONFIG.get("TREND", 20)),
-        ]
-
-        return entry_feats + post_feats
-
-    except Exception as e:
-        log_alt(f"[ML-FEAT] build_complete_ml_features_alt error ({coin}): {e} — fallback zeros")
-        return [0.0] * OnlineGBClassifier.N_FEATURES
-
-
 def ml_predict_signal(features):
     """
     ML filter:
@@ -1532,31 +1372,30 @@ def ml_predict_signal(features):
         "block": False,
     }
 
-    # acc = MAE rolling; attiva solo se MAE < 1.5 (predizioni non casuali)
-    if n >= 50 and acc < 1.5:
+    if n >= 50 and acc >= 0.55:
         info["ml_active"] = True
-        if prob < -0.3:
+        if prob < 0.40:
             info["action"] = "BLOCK"
             info["block"] = True
-        elif prob < 0.0:
             info["action"] = "SOFT_REDUCE"
-            info["size_mult"] = 0.70
-        elif prob < 0.2:
-            info["action"] = "SLIGHT_REDUCE"
+        elif prob < 0.45:
+            # Sotto media → riduci size del 10%
             info["size_mult"] = 0.90
+            info["action"] = "SLIGHT_REDUCE"
         else:
+            # Probabilità OK o alta → nessuna modifica (mai boosta)
             info["action"] = "NEUTRAL"
             info["size_mult"] = 1.0
 
     return prob, info
 
 
-def ml_record_outcome(features, trade_expectancy: float):
-    """Aggiorna il modello BTC con la trade_expectancy reale (pnl_pct / atr_pct)."""
-    _ml_model.update(features, trade_expectancy)
+def ml_record_outcome(features, won):
+    """Record trade outcome per aggiornare il modello online."""
+    _ml_model.update(features, 1 if won else 0)
     if _ml_model.n_samples % 5 == 0:
         _rset("btc7:ml_model", _ml_model.to_dict())
-        log_btc(f"[ML] Saved ({_ml_model.n_samples} samples, MAE:{_ml_model.get_accuracy():.3f})")
+        log_btc(f"[ML] Saved ({_ml_model.n_samples} samples, acc:{_ml_model.get_accuracy():.0%})")
 
 
 def ml_load_model():
@@ -2075,27 +1914,34 @@ def update_regime():
     return _btc_regime
 
 # ================================================================
-import math
-
-# ================================================================
-# DYNAMIC LEVERAGE SELECTION (Market-Adaptive) - OPTIMIZED
+# DYNAMIC LEVERAGE SELECTION (Market-Adaptive)
 # ================================================================
 
 def analyze_market_for_leverage(coin: str = "BTC") -> dict:
     """
     Pipeline in 3 step:
       1. ANALISI MERCATO  — volatilità (ATR%), trend (ADX), volume (vol_rel), spread
-      2. DETERMINA LEVA   — regole hard priority + score composito → 10x | 15x | 20x
-                            (LEV_LOW=10, LEV_NORMAL=15, LEV_HIGH=20)
-      3. (caller)         — applica min(score_lev, LEVERAGE_CONFIG[regime]) → CALCOLA SIZE
+      2. DETERMINA LEVA   — regole hard priority + score composito → 5x | 10x | 15x
+      3. (caller)         — CALCOLA SIZE = max($10, margin × leva) / prezzo
+
+    Regole hard (priority order, applicate prima dello score):
+      • volatilità HIGH  (ATR% > 1.5%)       → forza 5x
+      • spread POOR      (spread > 0.2%)      → forza 5x
+      • funding estremo  (|z| > 2.0)          → forza 5x
+      • volume spike     (vol_rel > LEV_VOL_SPIKE) AND
+        volatilità LOW   (ATR% < 0.8%)        → forza 15x
+      • trend STRONG     (ADX > 35) AND
+        volatilità LOW                         → forza 15x
+
+    Score composito (solo se nessuna regola hard si attiva):
+      • volatilità:  HIGH→0 | MEDIUM→0.5 | LOW→1.0
+      • trend:       RANGING→0 | WEAK→0.3 | MODERATE→0.7 | STRONG→1.0
+      • volume:      <0.5→-0.2 | 0.5-1.5→0 | >1.5→+0.3 | >2.5→+0.5
+      • liquidità:   POOR→-0.5 | FAIR→0 | EXCELLENT→+0.3
+      Soglie:  score < 0.4 → 5x | 0.4-0.75 → 10x | > 0.75 → 15x
     """
-    _default = {
-        "recommended_leverage": LEV_DEFAULT, 
-        "reasoning": "default (dati insufficienti)",
-        "market_volatility": "MEDIUM", 
-        "trend_strength": "MODERATE", 
-        "liquidity_score": LEV_LIQUIDITY_DEFAULT_SCORE
-    }
+    _default = {"recommended_leverage": LEV_DEFAULT, "reasoning": "default (dati insufficienti)",
+                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": LEV_LIQUIDITY_DEFAULT_SCORE}
     try:
         df_15m = fetch_df(coin, "15m", LEV_LOOKBACK_DAYS)
         if df_15m is None or len(df_15m) < LEV_MIN_CANDLES:
@@ -2107,7 +1953,7 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
         atr_pct = atr / px if px > 0 else 0
 
         # ── STEP 1: ANALISI MERCATO ──────────────────────────────────
-        
+
         # Volatilità
         if atr_pct > LEV_ATR_HIGH_PCT:
             vol_level = "HIGH"
@@ -2130,21 +1976,21 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
         # Volume
         vol_rel = float(r.get('vol_rel', 1.0))
 
-        # Spread / liquidità (Assicurarsi che spread_real sia in formato decimale/percentuale, es: 0.001 per 0.1%)
+        # Spread / liquidità
         try:
-            liq = fetch_liquidity_data(coin, px) if coin != "BTC" else fetch_liquidity()
+            liq    = fetch_liquidity_data(coin, px) if coin != "BTC" else fetch_liquidity()
             spread = liq.get("spread_real", LEV_SPREAD_FAIR) if liq else LEV_SPREAD_FAIR
         except Exception:
             spread = LEV_SPREAD_FAIR
 
         if spread > LEV_SPREAD_POOR:
-            liq_level       = "POOR"
+            liq_level     = "POOR"
             liquidity_score = 0.0
         elif spread > LEV_SPREAD_FAIR:
-            liq_level       = "FAIR"
+            liq_level     = "FAIR"
             liquidity_score = LEV_LIQUIDITY_FALLBACK_SCORE
         else:
-            liq_level       = "EXCELLENT"
+            liq_level     = "EXCELLENT"
             liquidity_score = 1.0
 
         # Funding
@@ -2155,10 +2001,10 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
 
         # ── STEP 2: DETERMINA LEVA ───────────────────────────────────
 
+        # — Regole hard (in ordine di priorità decrescente) —
         hard_reason = ""
         best_lev    = 0   # 0 = nessuna regola hard attivata
 
-        # Controllo Regole Hard (Priorità decrescente)
         if vol_level == "HIGH":
             best_lev    = LEV_LOW
             hard_reason = f"volatilità ALTA (ATR {atr_pct:.2%})"
@@ -2175,18 +2021,14 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
             best_lev    = LEV_HIGH
             hard_reason = f"trend STRONG (ADX {adx:.0f}) + bassa volatilità"
 
-        # Score composito (solo se nessuna regola hard)
+        # — Score composito (solo se nessuna regola hard) —
         if best_lev == 0:
             vol_score   = {"LOW": 1.0, "MEDIUM": 0.5, "HIGH": 0.0}[vol_level]
             trend_score = {"RANGING": 0.0, "WEAK": 0.3, "MODERATE": 0.7, "STRONG": 1.0}[trend_level]
-            
             vol_bonus   = LEV_VOL_BONUS_HIGH if vol_rel > LEV_VOL_SPIKE else LEV_VOL_BONUS_MED if vol_rel > LEV_VOL_BONUS_MED_THRESHOLD else 0.0 if vol_rel >= LEV_VOL_BONUS_MIN_THRESHOLD else LEV_VOL_BONUS_LOW
             liq_bonus   = LEV_LIQ_BONUS_EXCELLENT if liq_level == "EXCELLENT" else 0.0 if liq_level == "FAIR" else LEV_LIQ_BONUS_POOR
 
-            score = (vol_score * LEV_VOL_SCORE_WEIGHT + 
-                     trend_score * LEV_TREND_SCORE_WEIGHT + 
-                     vol_bonus * LEV_VOLUME_SCORE_WEIGHT + 
-                     liq_bonus * LEV_LIQUIDITY_SCORE_WEIGHT)
+            score = vol_score * LEV_VOL_SCORE_WEIGHT + trend_score * LEV_TREND_SCORE_WEIGHT + vol_bonus * LEV_VOLUME_SCORE_WEIGHT + liq_bonus * LEV_LIQUIDITY_SCORE_WEIGHT
 
             if score > LEV_SCORE_AGGRESSIVE:
                 best_lev    = LEV_HIGH
@@ -2214,28 +2056,25 @@ def analyze_market_for_leverage(coin: str = "BTC") -> dict:
 
     except Exception as e:
         log_btc(f"[LEV] Errore analisi: {e} → fallback 10x")
-        return {
-            "recommended_leverage": LEV_DEFAULT, 
-            "reasoning": f"fallback ({e})",
-            "market_volatility": "MEDIUM", 
-            "trend_strength": "MODERATE", 
-            "liquidity_score": LEV_LIQUIDITY_FALLBACK_SCORE
-        }
+        return {"recommended_leverage": LEV_DEFAULT, "reasoning": f"fallback ({e})",
+                "market_volatility": "MEDIUM", "trend_strength": "MODERATE", "liquidity_score": LEV_LIQUIDITY_FALLBACK_SCORE}
 
 
 def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = None,
                          coin: str = "BTC", capital_usd: float = None,
                          size_mult: float = 1.0) -> tuple:
     """
-    STEP 3: Calcola la size della posizione garantendo la conformità con il Notional Minimo.
-    Risolve le ridondanze di calcolo e previene sotto-dimensionamenti dovuti ad arrotondamento.
-    """
-    if entry_px <= 0 or leverage <= 0:
-        return 0.0, 0.0, 0.0, 5
+    STEP 3 della pipeline leverage:
+        size = max($10, margin × leva) / prezzo
 
+    Il size_mult (da ML/AI) viene applicato sul MARGINE prima di tutto,
+    in modo che la formula rimanga coerente.
+
+    Returns: (size, margin_used, notional, sz_dec)
+    """
     sz_dec = _btc_coin_meta.get("sz_dec", 5) if coin == "BTC" else 5
 
-    # 1. Determina il margine base
+    # Determina margine base
     if margin_usd is not None:
         margin_base = margin_usd
     elif coin == "BTC":
@@ -2243,45 +2082,39 @@ def calculate_trade_size(entry_px: float, leverage: int, margin_usd: float = Non
     else:
         if capital_usd is None:
             capital_usd = get_balance()
-        margin_base = ALT_TRADE_SIZE_USD
+        margin_base = max(BASE_MARGIN_USD / 1, capital_usd * ALT_MARGIN_PCT)
 
-    # 2. Applica il moltiplicatore sul margine
+    # Applica size_mult sul margine (prima di tutto il resto)
     margin_used = margin_base * size_mult
 
-    # 2b. Cap assoluto: il margine impegnato non può mai superare $1.20 per trade
-    margin_used = min(float(margin_used), 1.2)
+    # Formula canonica: notional = max($10, margin × leva)
+    notional = max(MIN_NOTIONAL_USD, margin_used * leverage)
 
-    # 3. Calcolo del Notional Teorico e della Size nominale
-    notional_teorico = margin_used * leverage
-    notional_target = max(MIN_NOTIONAL_USD, notional_teorico)
-    
-    raw_size = notional_target / entry_px
-    size = round_to_decimals(raw_size, sz_dec)
+    # Se il floor $10 ha alzato il notional, adegua il margine di conseguenza
+    if notional > margin_used * leverage:
+        margin_used = notional / leverage
 
-    # 4. Controllo post-arrotondamento (Se arrotondando per difetto scendiamo sotto il minimo consentito)
+    # Size in coin
+    size = notional / entry_px if entry_px > 0 else 0
+    size = round_to_decimals(size, sz_dec)
+
+    # Verifica finale (arrotondamento può abbassare di poco)
     final_notional = size * entry_px
     if final_notional < MIN_NOTIONAL_USD - FINAL_NOTIONAL_TOLERANCE_USD:
-        # Forza arrotondamento per eccesso per non violare i vincoli dell'exchange
         min_size = MIN_NOTIONAL_USD / entry_px
-        size = round_to_decimals(min_size + (10 ** -sz_dec), sz_dec)
+        size = round_to_decimals(min_size, sz_dec)
         final_notional = size * entry_px
-
-    # Reciproca precisione sul margine realmente impegnato sul conto
-    margin_used = final_notional / leverage
+        margin_used = final_notional / leverage
 
     log_btc(f"[SIZE] {coin} | lev:{leverage}x | margin:${margin_used:.2f} × mult:{size_mult:.2f} "
             f"| notional:${final_notional:.2f} | size:{size}")
 
     return size, margin_used, final_notional, sz_dec
 
-
 def tune_leverage_for_profit_target(coin: str, entry_px: float, tp_px: float,
                                     margin_usd: float, current_leverage: int,
                                     max_leverage: int, size_mult: float = 1.0) -> dict:
-    """
-    Aumenta la leva solo se il TP scelto dagli indicatori non è matematicamente
-    sufficiente a raggiungere il target monetario impostato (TARGET_PROFIT_USD).
-    """
+    """Aumenta la leva solo se il TP scelto dagli indicatori non arriva al target USD."""
     try:
         if TARGET_PROFIT_USD <= 0 or entry_px <= 0 or tp_px <= 0:
             return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": "target disabilitato"}
@@ -2291,30 +2124,25 @@ def tune_leverage_for_profit_target(coin: str, entry_px: float, tp_px: float,
             return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": "TP nullo"}
 
         net_tp_pct = tp_pct - TARGET_PROFIT_FEE_PCT
-        if net_tp_pct <= 0:
-            return {"leverage": int(max_leverage), "expected_profit": 0.0, "tp_pct": tp_pct, "reason": f"Fickle profit margin dopo commissioni su {tp_pct:.2%}"}
-
-        # Margine effettivo calibrato esattamente come farà calculate_trade_size
         margin_eff = max(SIZE_MULT_MIN, float(margin_usd) * max(SIZE_MULT_MIN, float(size_mult)))
         max_lev = max(LEVERAGE_MIN, int(max_leverage))
         base_lev = max(LEVERAGE_MIN, min(int(current_leverage), max_lev))
 
-        # Calcolo leva necessaria basata sul target monetario desiderato
-        required_notional = TARGET_PROFIT_USD / net_tp_pct
-        required_lev = max(LEVERAGE_MIN, int(math.ceil(required_notional / margin_eff)))
+        if net_tp_pct <= 0:
+            required_lev = max_lev
+        else:
+            required_notional = TARGET_PROFIT_USD / net_tp_pct
+            required_lev = max(LEVERAGE_MIN, int(math.ceil(required_notional / margin_eff)))
 
-        # Sceglie la leva ottimale senza scendere sotto la base generata dai filtri di mercato
         chosen_lev = min(max(base_lev, required_lev), max_lev)
-        
-        # Stima del profitto atteso reale
         notional = max(MIN_NOTIONAL_USD, margin_eff * chosen_lev)
-        expected_profit = notional * net_tp_pct
+        expected_profit = notional * max(net_tp_pct, 0.0)
 
         if expected_profit + 1e-9 < TARGET_PROFIT_USD:
-            reason = (f"target netto ${TARGET_PROFIT_USD:.2f} non raggiungibile: max consentito {chosen_lev}x "
+            reason = (f"target netto ${TARGET_PROFIT_USD:.2f} non pieno: max {chosen_lev}x "
                       f"=> ${expected_profit:.2f} stimati")
         elif chosen_lev > base_lev:
-            reason = (f"target netto ${TARGET_PROFIT_USD:.2f}: incremento leva {base_lev}x→{chosen_lev}x "
+            reason = (f"target netto ${TARGET_PROFIT_USD:.2f}: leva {base_lev}x→{chosen_lev}x "
                       f"su TP {tp_pct:.2%}")
         else:
             reason = f"target netto ${TARGET_PROFIT_USD:.2f} ok con {chosen_lev}x su TP {tp_pct:.2%}"
@@ -2328,6 +2156,7 @@ def tune_leverage_for_profit_target(coin: str, entry_px: float, tp_px: float,
         }
     except Exception as e:
         return {"leverage": int(current_leverage), "expected_profit": 0.0, "tp_pct": 0.0, "reason": f"target fallback ({e})"}
+# ================================================================
 # BACKTEST — testa i segnali esatti del bot su storico 5m
 # ================================================================
 _btc_bt_results = {}   # {"PULLBACK_LONG": {"pf":1.3, "wr":0.45, "n":80}, ...}
@@ -3406,22 +3235,15 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
         # ── ANALISI DINAMICA LEVA ──
         lev_analysis = analyze_market_for_leverage("BTC")
         selected_leverage = lev_analysis["recommended_leverage"]
-
-        # FIX: cap applicato nell'ordine corretto:
-        #  1. Cap regime (LEVERAGE_CONFIG) — rispetta la logica risk/regime
-        #  2. Cap exchange (get_max_leverage()) — rispetta i limiti tecnici
-        regime_lev_cap = LEVERAGE_CONFIG.get(scalp_mode, LEVERAGE_CONFIG["TREND"])
-        selected_leverage = min(selected_leverage, regime_lev_cap)
+        
+        # Cap leva al massimo consentito dall'exchange
         max_lev_allowed = get_max_leverage()
         if selected_leverage > max_lev_allowed:
-            log_btc(f"⚠️ Leva {selected_leverage}x > max exchange {max_lev_allowed}x → ridotta")
+            log_btc(f"⚠️ Leva {selected_leverage}x > max {max_lev_allowed}x → ridotta")
             selected_leverage = max_lev_allowed
-        log_btc(f"⚙️ Regime {scalp_mode}: leva score={lev_analysis['recommended_leverage']}x → cap={regime_lev_cap}x → finale={selected_leverage}x")
-
-        # FIX: tune_leverage_for_profit_target riceve il cap REGIME, non il max exchange.
-        # In questo modo non può mai bucare il limite di rischio del regime.
+        
         target_info = tune_leverage_for_profit_target(
-            BTC_COIN, entry_px, tp, BTC_MARGIN_USD, selected_leverage, regime_lev_cap, size_mult
+            BTC_COIN, entry_px, tp, BTC_MARGIN_USD, selected_leverage, max_lev_allowed, size_mult
         )
         selected_leverage = target_info["leverage"]
         log_btc(f"🎯 Target profit: {target_info['reason']}")
@@ -3449,8 +3271,6 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
             return False
         
         log_btc(f"💰 SIZE: margin=${margin_used:.2f} × leva={selected_leverage}x → notional=${notional:.2f} → {size} BTC")
-        _tp_pct_eff, _sl_pct_eff = compute_tp_sl_pct(selected_leverage)
-        log_btc(f"📐 TP/SL price-pct effettivi per {selected_leverage}x: TP={_tp_pct_eff:.3%} SL={_sl_pct_eff:.3%}")
 
         # ── ENTRY: aggressivo al mid ──
         mid = get_mid()
@@ -3458,15 +3278,8 @@ def btc_open_trade(direction, sl, tp, entry_px, sl_dist, sz_dec, px_dec, size_mu
             log_btc("❌ get_mid() failed")
             return False
 
-        # ── SPREAD CHECK — skip se spread > 0.15% ──
-        _liq = fetch_liquidity()
-        _spread_pct = _liq.get("spread")
-        if _spread_pct is not None and _spread_pct > 0.0015:
-            log_btc(f"⛔ Spread {_spread_pct:.4%} > 0.15% — trade skippato")
-            return False
-
         px = rpx(mid * (BTC_ENTRY_LONG_MULT if is_long else BTC_ENTRY_SHORT_MULT), px_dec)
-        log_btc(f"{'🟢' if is_long else '🔴'} ORDER {direction} [{scalp_mode}] @ {px} size:{size} spread:{_spread_pct:.4%}")
+        log_btc(f"{'🟢' if is_long else '🔴'} ORDER {direction} [{scalp_mode}] @ {px} size:{size}")
 
 
         res = call(_exchange.order, BTC_COIN, is_long, size, px,
@@ -3874,9 +3687,9 @@ def load_state_from_redis():
                if (now - v.get("ts", 0)) < v.get("signal_max_age", SIGNAL_MAX_AGE)}
 
     candidates = _rget("state:candidates") or {}
-    # Filtra candidati scaduti (TTL: durata ciclo scanner ~20min + margine)
+    # Filtra candidati scaduti (TTL: 3 cicli processor = 15 min)
     candidates = {k: v for k, v in candidates.items()
-                  if (now - v.get("ts", 0)) < 1800}
+                  if (now - v.get("ts", 0)) < PROCESSOR_INTERVAL * 3}
 
     cooldowns_raw = _rget("state:cooldowns") or {}
     # Compatibilità: converti vecchio formato {coin: timestamp} al nuovo {coin: {ts, strategy}}
@@ -3928,11 +3741,6 @@ def publish_signal(coin: str, data: dict):
 def get_candidate(coin: str) -> dict:
     with _state_lock:
         return dict(_candidates_store.get(coin, {}))
-
-def get_candidates_store() -> dict:
-    """Ritorna tutti i candidati correnti (usato da SR fast-entry)."""
-    with _state_lock:
-        return dict(_candidates_store)
 
 def set_candidate(coin: str, data: dict):
     with _state_lock:
@@ -4421,158 +4229,7 @@ def detect_scalp_mode(adx_1h, vol_rel, bb_pos, regime, funding_z=0):
     elif adx_1h >= 20:
         return "TREND"
     return "RANGE"
-def compute_sr_levels(coin: str, n_levels: int = 5) -> dict:
-    """
-    Calcola supporti e resistenze strutturali da candle 4h e 1d.
-    Metodo: swing high/low su finestra scorrevole + clustering dei livelli vicini.
-    Ritorna {'supports': [...], 'resistances': [...]} ordinati per distanza dal prezzo.
-    """
-    try:
-        now = int(time.time() * 1000)
-        # Fetch 4h (60 candele = 10 giorni) e 1d (30 giorni)
-        c4h = call(_info.candles_snapshot, coin, "4h", now - 86400000 * 10, now, timeout=15)
-        c1d = call(_info.candles_snapshot, coin, "1d", now - 86400000 * 30, now, timeout=15)
-        if not c4h or len(c4h) < 10:
-            return {"supports": [], "resistances": []}
-
-        def to_df(candles):
-            df = pd.DataFrame(candles)
-            df.columns = ['t','T','s','i','o','c','h','l','v','n']
-            df[['h','l','c']] = df[['h','l','c']].astype(float)
-            return df
-
-        df4 = to_df(c4h)
-        df1d = to_df(c1d) if c1d and len(c1d) >= 5 else pd.DataFrame()
-
-        current_px = float(df4['c'].iloc[-1])
-        swing_window = 3  # candele a sinistra e destra per swing
-
-        highs, lows = [], []
-
-        # Swing su 4h
-        for i in range(swing_window, len(df4) - swing_window):
-            h = df4['h'].iloc[i]
-            l = df4['l'].iloc[i]
-            if all(h >= df4['h'].iloc[i-swing_window:i]) and all(h >= df4['h'].iloc[i+1:i+swing_window+1]):
-                highs.append(h)
-            if all(l <= df4['l'].iloc[i-swing_window:i]) and all(l <= df4['l'].iloc[i+1:i+swing_window+1]):
-                lows.append(l)
-
-        # Aggiungi swing su 1d se disponibile
-        if not df1d.empty:
-            for i in range(2, len(df1d) - 2):
-                h = df1d['h'].iloc[i]
-                l = df1d['l'].iloc[i]
-                if all(h >= df1d['h'].iloc[i-2:i]) and all(h >= df1d['h'].iloc[i+1:i+3]):
-                    highs.append(h)
-                if all(l <= df1d['l'].iloc[i-2:i]) and all(l <= df1d['l'].iloc[i+1:i+3]):
-                    lows.append(l)
-
-        # Clustering: raggruppa livelli entro 0.5% tra loro
-        def cluster(levels, tol_pct=0.005):
-            if not levels:
-                return []
-            levels = sorted(levels)
-            clusters = [[levels[0]]]
-            for lv in levels[1:]:
-                if (lv - clusters[-1][-1]) / clusters[-1][-1] < tol_pct:
-                    clusters[-1].append(lv)
-                else:
-                    clusters.append([lv])
-            return [sum(c) / len(c) for c in clusters]
-
-        resistances = sorted([lv for lv in cluster(highs) if lv > current_px * 1.001])
-        supports    = sorted([lv for lv in cluster(lows)  if lv < current_px * 0.999], reverse=True)
-
-        return {
-            "supports":    supports[:n_levels],
-            "resistances": resistances[:n_levels],
-            "current_px":  current_px
-        }
-    except Exception as e:
-        log_err(f"[SR] Errore calcolo S/R per {coin}: {e}")
-        return {"supports": [], "resistances": []}
-
-
-def check_sr_clearance(coin: str, direction: str, entry_px: float, tp_px: float,
-                       sr: dict, min_clearance_pct: float = 0.003) -> tuple:
-    """
-    Verifica che la struttura S/R non comprometta il trade.
-
-    SHORT:
-      1. Supporto tra TP e entry → ostacolo diretto alla discesa
-      2. Supporto più vicino del TP × 1.5 → R:R strutturale negativo
-      3. Resistenza entro 2% sopra entry → rischio rimbalzo verso l'alto
-
-    LONG:
-      1. Resistenza tra entry e TP → ostacolo diretto alla salita
-      2. Resistenza più vicina del TP × 1.5 → R:R strutturale negativo
-      3. Supporto entro 2% sotto entry diventato resistenza → rischio caduta
-
-    Ritorna (ok: bool, motivo: str).
-    """
-    if not sr or (not sr.get("resistances") and not sr.get("supports")):
-        return True, ""
-
-    supports    = sr.get("supports", [])
-    resistances = sr.get("resistances", [])
-
-    if direction == "SHORT":
-        tp_dist = entry_px - tp_px  # distanza positiva verso il basso
-
-        # 1. Supporto direttamente tra TP e entry
-        blocking = [lv for lv in supports if tp_px < lv < entry_px]
-        if blocking:
-            nearest = max(blocking)  # il più vicino all'entry
-            dist_pct = (entry_px - nearest) / entry_px * 100
-            return False, f"supporto a {nearest:.4f} ({dist_pct:.1f}% sotto entry) blocca la discesa verso TP"
-
-        # 2. Supporto più vicino troppo ravvicinato rispetto al TP
-        below = [lv for lv in supports if lv < entry_px]
-        if below:
-            nearest_sup = max(below)
-            dist_to_sup = entry_px - nearest_sup
-            if dist_to_sup < tp_dist * 1.5:
-                return False, (f"supporto a {nearest_sup:.4f} troppo vicino "
-                               f"(dist {dist_to_sup:.2f} < TP dist {tp_dist:.2f} × 1.5)")
-
-        # 3. Resistenza ravvicinata sopra entry → rimbalzo probabile
-        near_res = [lv for lv in resistances if entry_px < lv < entry_px * 1.02]
-        if near_res:
-            nearest = min(near_res)
-            dist_pct = (nearest - entry_px) / entry_px * 100
-            return False, f"resistenza a {nearest:.4f} ({dist_pct:.1f}% sopra entry) — rimbalzo verso SHORT improbabile"
-
-    else:  # LONG
-        tp_dist = tp_px - entry_px  # distanza positiva verso l'alto
-
-        # 1. Resistenza direttamente tra entry e TP
-        blocking = [lv for lv in resistances if entry_px < lv < tp_px]
-        if blocking:
-            nearest = min(blocking)
-            dist_pct = (nearest - entry_px) / entry_px * 100
-            return False, f"resistenza a {nearest:.4f} ({dist_pct:.1f}% sopra entry) blocca la salita verso TP"
-
-        # 2. Resistenza più vicina troppo ravvicinata rispetto al TP
-        above = [lv for lv in resistances if lv > entry_px]
-        if above:
-            nearest_res = min(above)
-            dist_to_res = nearest_res - entry_px
-            if dist_to_res < tp_dist * 1.5:
-                return False, (f"resistenza a {nearest_res:.4f} troppo vicina "
-                               f"(dist {dist_to_res:.2f} < TP dist {tp_dist:.2f} × 1.5)")
-
-        # 3. Supporto ravvicinato sotto entry → possibile caduta
-        near_sup = [lv for lv in supports if entry_px * 0.98 < lv < entry_px]
-        if near_sup:
-            nearest = max(near_sup)
-            dist_pct = (entry_px - nearest) / entry_px * 100
-            return False, f"supporto a {nearest:.4f} ({dist_pct:.1f}% sotto entry) — rottura probabile"
-
-    return True, ""
-
-
-def check_margin_ok(coin, size, entry_px, lev=None):
+def check_margin_ok(coin, size, entry_px):
     """Verifica margine sufficiente prima di inviare ordine."""
     try:
         state = call(_info.user_state, account.address, label='margin_check', timeout=10)
@@ -4580,8 +4237,7 @@ def check_margin_ok(coin, size, entry_px, lev=None):
         account_val = float(ms.get("accountValue", 0) or 0)
         margin_used = float(ms.get("totalMarginUsed", 0) or 0)
         available = account_val - margin_used
-        effective_lev = lev if lev else LEVERAGE
-        required = (size * entry_px) / effective_lev  # margine puro, senza buffer artificiale
+        required = (size * entry_px) / LEVERAGE * 1.2  # +20% buffer
         if available < required:
             log_exec(f"[{coin}] Margine insufficiente: need ${required:.2f} have ${available:.2f}")
             return False
@@ -5426,11 +5082,11 @@ def run_processor():
 
             # ── Fetch candele 3 TF: 1h (trend) + 15m (setup) + 5m (entry) ──
             candles_1h  = fetch_candles(TIMEFRAME_TREND, LOOKBACK_DAYS_TREND, "-1h")
-            time.sleep(0.1)
+            time.sleep(0.3)
             candles_15m = fetch_candles(TIMEFRAME_SETUP, LOOKBACK_DAYS_SETUP, "-15m")
-            time.sleep(0.1)
+            time.sleep(0.3)
             candles_5m  = fetch_candles(TIMEFRAME_ENTRY, LOOKBACK_DAYS_ENTRY, "-5m")
-            time.sleep(0.1)
+            time.sleep(0.3)
 
             if not candles_1h or len(candles_1h) < MIN_CANDLES_TREND:
                 skip_counts["candles_4h"] += 1  # reuso counter
@@ -5715,31 +5371,6 @@ def run_processor():
             if not can_trade:
                 continue
 
-            # ── SR PROXIMITY BOOST ────────────────────────────────────
-            # Se il prezzo è vicino a un livello S/R strutturale noto,
-            # il segnale REVERSAL è più affidabile — abbassa la soglia confluence.
-            # Distanza massima dinamica basata su ATR (si adatta alla volatilità).
-            sr_boost = False
-            if strategy == "REVERSAL":
-                sr_data = compute_sr_levels(coin, n_levels=3)
-                max_dist_sr = atr * 0.5  # 0.3–0.8 × ATR a seconda dell'aggressività
-                if direction == "LONG" and sr_data.get("supports"):
-                    nearest_sup = min(sr_data["supports"], key=lambda lv: abs(lv - px))
-                    dist = px - nearest_sup  # positivo = prezzo sopra il supporto (avvicinamento)
-                    if 0 < dist <= max_dist_sr:
-                        sr_boost = True
-                        log_alt(f"[{coin}] 📍 SR boost LONG: prezzo {px:.4f} vicino supporto {nearest_sup:.4f} (dist {dist:.4f} ≤ ATR×0.5 {max_dist_sr:.4f})")
-                elif direction == "SHORT" and sr_data.get("resistances"):
-                    nearest_res = min(sr_data["resistances"], key=lambda lv: abs(lv - px))
-                    dist = nearest_res - px  # positivo = prezzo sotto la resistenza (avvicinamento)
-                    if 0 < dist <= max_dist_sr:
-                        sr_boost = True
-                        log_alt(f"[{coin}] 📍 SR boost SHORT: prezzo {px:.4f} vicino resistenza {nearest_res:.4f} (dist {dist:.4f} ≤ ATR×0.5 {max_dist_sr:.4f})")
-                if sr_boost:
-                    entry_profile = dict(entry_profile)
-                    entry_profile["confluence_min"] = max(1, entry_profile["confluence_min"] - 1)
-                    entry_profile["pf_min"] = max(1.0, entry_profile["pf_min"] - 0.10)
-
             recent_closes = df['close'].iloc[-12:].tolist()
 
             # ══════════════════════════════════════════════════════════
@@ -5894,16 +5525,19 @@ def run_processor():
                 continue
 
             # ── ML ALT FILTER ────────────────────────────────────────
-            _sentiment_now = get_sentiment_score()
-            ml_alt_features = build_complete_ml_features_alt(
-                coin, df_5m, df_15m, df_1h,
-                regime,
-                candidate.get("mode", "SCALPING"),
-                ai_score,
-                funding_z,
-                oi_change,
-                _sentiment_now,
-            )
+            ml_alt_features = [
+                rsi, float(df.iloc[-1].get('rsi', 50) if hasattr(df.iloc[-1], 'get') else 50),
+                float(df.iloc[-1].get('macd_hist', 0) if hasattr(df.iloc[-1], 'get') else 0),
+                float(df.iloc[-1].get('adx', 20) if hasattr(df.iloc[-1], 'get') else 20),
+                vol_rel, funding_z, 50.0,
+                liq_data.get("imbalance", 0.5) if liq_data else 0.5,
+                0.0,  # cvd_slope placeholder
+                encode_regime(regime),
+                encode_mode(candidate.get("mode", "SCALPING")),
+                float(ai_score), 0.0, bb_pos,
+                float(df.iloc[-1].get('ema_slope', 0) if hasattr(df.iloc[-1], 'get') else 0),
+                spread_pct
+            ]
             ml_alt_prob, ml_alt_info = ml_predict_alt(ml_alt_features)
             if ml_alt_info.get("block"):
                 log_alt(f"[{coin}] 🤖 ML-ALT BLOCK: P(win)={ml_alt_prob:.0%} acc:{ml_alt_info['acc']:.0%} — skip")
@@ -6349,15 +5983,13 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
     if mid_px <= 0:
         log_err(f"[{coin}] Prezzo non disponibile")
         return False
-
+    
     # ── ANALISI DINAMICA LEVA PER QUESTA COIN ──
     lev_analysis = analyze_market_for_leverage(coin)
     selected_leverage = lev_analysis["recommended_leverage"]
-
-    # Cap leva per scalp_mode del segnale (LEVERAGE_CONFIG globale)
-    scalp_mode = signal.get("scalp_mode", "TREND")
-    regime_lev_cap = LEVERAGE_CONFIG.get(scalp_mode, ALT_LEVERAGE)
-    selected_leverage = min(selected_leverage, regime_lev_cap)
+    
+    # Cap leva a max 20x per ALT (sicurezza)
+    selected_leverage = min(selected_leverage, ALT_MAX_LEVERAGE)
     
     # ── IMPOSTA LEVA ──
     try:
@@ -6455,18 +6087,6 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         log_err(f"[{coin}] SL/TP non validi")
         return False
 
-    # ── SUPPORTI / RESISTENZE — verifica clearance tra entry e TP ──
-    sr = compute_sr_levels(coin)
-    sr_ok, sr_reason = check_sr_clearance(coin, direction, mid_px, tp_raw, sr)
-    if not sr_ok:
-        log_exec(f"[{coin}] ❌ SR block [{direction}]: {sr_reason}")
-        delete_signal(coin)
-        return False
-    if sr.get("supports") or sr.get("resistances"):
-        near_sup = sr["supports"][:2]  if sr.get("supports")    else []
-        near_res = sr["resistances"][:2] if sr.get("resistances") else []
-        log_exec(f"[{coin}] SR ok | sup:{[f'{x:.4f}' for x in near_sup]} res:{[f'{x:.4f}' for x in near_res]}")
-
     # Calcola decimali minimi necessari: se il prezzo è 0.048 e px_dec=2,
     # arrotondare a 2 decimali collassa entry/SL/TP a 0.05.
     # Serve almeno abbastanza decimali per distinguere entry, SL e TP.
@@ -6502,22 +6122,22 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         return False
 
     target_info = tune_leverage_for_profit_target(
-        coin, entry_px, tp_px, TRADE_SIZE_USD, selected_leverage, regime_lev_cap, size_mult
+        coin, entry_px, tp_px, TRADE_SIZE_USD, selected_leverage, ALT_MAX_LEVERAGE, size_mult
     )
     selected_leverage = target_info["leverage"]
     log_exec(f"[{coin}] 🎯 Target profit: {target_info['reason']}")
 
-    # Size calcolata sul nozionale — margine fisso × leva, floor MIN_NOTIONAL_USD ($10)
-    # size_mult NON tocca il margine, viene applicato solo alla size contratto finale
-    notional_target = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * selected_leverage)
-    size_nominal = round_to_decimals(notional_target / entry_px * size_mult, sz_dec)
+    # Size calcolata sul nozionale — margine × leva effettiva, floor MIN_NOTIONAL_USD ($10)
+    # notional = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD × leva selezionata)
+    notional_target = max(MIN_NOTIONAL_USD, TRADE_SIZE_USD * size_mult * selected_leverage)
+    size_nominal = round_to_decimals(notional_target / entry_px, sz_dec)
     if size_nominal <= 0:
         return False
 
     if size_nominal * entry_px < MIN_NOTIONAL_USD - 0.05:
         log_err(f"[{coin}] Notional insufficiente ({size_nominal} × {entry_px:.4f} = {size_nominal * entry_px:.2f} < {MIN_NOTIONAL_USD})")
         return False
-    log_exec(f"[{coin}] 💰 SIZE: margin=${TRADE_SIZE_USD:.2f} × leva={selected_leverage}x → notional=${notional_target:.2f} → {size_nominal} | TP≈${target_info['expected_profit']:.2f}")
+    log_exec(f"[{coin}] 💰 SIZE: margin=${TRADE_SIZE_USD * size_mult:.2f} × leva={selected_leverage}x → notional=${notional_target:.2f} → {size_nominal} | TP≈${target_info['expected_profit']:.2f}")
 
     log_exec(f"[{coin}] {direction} entry:{entry_px} sl:{sl_px} tp:{tp_px} size:{size_nominal}")
 
@@ -6574,7 +6194,7 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
             if size_nominal <= 0 or size_nominal * entry_px < MIN_NOTIONAL_USD:
                 log_err(f"[{coin}] Size insufficiente con leva {actual_lev}x: notional=${size_nominal * entry_px:.2f}")
                 return False
-            log_exec(f"[{coin}] 💰 Ricalcolo: margin=${TRADE_SIZE_USD:.2f} × leva={actual_lev}x → notional=${notional_actual:.2f} → {size_nominal}")
+            log_exec(f"[{coin}] 💰 Ricalcolo: margin=${TRADE_SIZE_USD * size_mult:.2f} × leva={actual_lev}x → notional=${notional_actual:.2f} → {size_nominal}")
 
             sl_pct = abs(entry_px - sl_px) / entry_px * 100
             tp_pct = abs(tp_px - entry_px) / entry_px * 100
@@ -6591,16 +6211,8 @@ def open_trade(coin, signal, mids, sz_dec, px_dec, size_mult: float = 1.0) -> bo
         time.sleep(0.5)
 
         # ── MARGIN CHECK (from V7) ──
-        if not check_margin_ok(coin, size_nominal, entry_px, lev=actual_lev):
+        if not check_margin_ok(coin, size_nominal, entry_px):
             return False
-
-        # ── SPREAD CHECK — skip se spread > 0.15% ──
-        _liq_alt = fetch_liquidity_data(coin, entry_px)
-        _spread_pct_alt = _liq_alt.get("spread_real")
-        if _spread_pct_alt is not None and _spread_pct_alt > 0.0015:
-            log_exec(f"[{coin}] ⛔ Spread {_spread_pct_alt:.4%} > 0.15% — trade skippato")
-            return False
-        log_exec(f"[{coin}] 📊 Spread ok: {(_spread_pct_alt or 0):.4%}")
 
         # ── GTC MAKER → IoC TAKER (from V7) ──
         scalp_mode = signal.get("scalp_mode", "TREND")
@@ -7614,21 +7226,10 @@ def executor_thread_alt():
                     log_exec(f"[{coin}] {emoji} Trade chiuso — {outcome} | PnL:{pnl_pct*100:+.2f}%")
                     tg(f"{emoji} <b>{coin}</b> [{direction}] chiuso — {outcome.upper()} | PnL: {pnl_pct*100:+.2f}%", silent=True)
 
-                    # ── ML ALT: aggiorna modello con trade_expectancy reale ──
+                    # ── ML ALT: aggiorna modello con outcome reale ──
                     ml_feats_alt = meta.get("ml_alt_features", [])
                     if ml_feats_alt and len(ml_feats_alt) == OnlineGBClassifier.N_FEATURES:
-                        _atr_a   = meta.get("atr", 0)
-                        _entr_a  = meta.get("entry_px", meta.get("entry", 0))
-                        _atr_pa  = (_atr_a / _entr_a) if _entr_a > 0 and _atr_a > 0 else 0.01
-                        _exp_a   = pnl_pct / _atr_pa   # pnl_pct è già ratio (non %)
-                        _ffa     = list(ml_feats_alt)
-                        if len(_ffa) == OnlineGBClassifier.N_FEATURES:
-                            _ffa[16] = meta.get("worst_pnl", 0.0)   # mae
-                            _ffa[17] = meta.get("peak_pnl",  0.0)   # mfe
-                            _ffa[19] = _atr_pa                       # atr_pct
-                            _ffa[23] = OnlineGBClassifier.encode_coin_category(coin)
-                            _ffa[24] = float(meta.get("effective_leverage", LEVERAGE_CONFIG.get("TREND", 20)))
-                        ml_record_alt_outcome(_ffa, _exp_a)
+                        ml_record_alt_outcome(ml_feats_alt, outcome == "win")
 
                     # ── ADAPTIVE PARAMS ALT: aggiorna MFE/MAE stats per coin ──
                     _update_adaptive_params_alt(coin, pnl_pct, meta.get("peak_pnl", 0), meta.get("worst_pnl", 0))
@@ -7877,129 +7478,6 @@ def executor_thread_alt():
                             "ml_alt_features":  sig.get("ml_alt_features", []),
                         }
                         time.sleep(5)
-                        active_positions = get_open_positions()  # aggiorna per evitare doppio open
-                # Se non ci sono segnali attivi ma ci sono slot liberi,
-                # controlla se qualche coin si trova su un livello S/R noto.
-                # Condizioni minime: RSI estremo + wick di inversione + volume.
-                if slots_free > 0 and not candidates:
-                    sr_candidates = get_candidates_store()  # coin dal processor
-                    for coin in list(sr_candidates.keys())[:15]:  # top 15 per velocità
-                        if coin in active_positions: continue
-                        if coin in pending_orders:   continue
-                        if (now - last_trade_time.get(coin, 0)) < COIN_COOLDOWN: continue
-                        is_corr, _ = is_correlated_with_active(coin, active_coin_set)
-                        if is_corr: continue
-                        try:
-                            mid_px = float(mids.get(coin, 0) or 0)
-                            if mid_px <= 0: continue
-                            sr_data = compute_sr_levels(coin, n_levels=3)
-                            if not sr_data.get("supports") and not sr_data.get("resistances"):
-                                continue
-                            # Fetch candle 5m per RSI e wick
-                            c5 = call(_info.candles_snapshot, coin, "5m",
-                                      int(now * 1000) - 3600000, int(now * 1000), timeout=8)
-                            if not c5 or len(c5) < 10: continue
-                            last = c5[-1]
-                            o, h, l, c_px, v = (float(last[k]) for k in ['o','h','l','c','v'])
-                            atr = float(np.mean([abs(float(c5[i]['h']) - float(c5[i]['l']))
-                                                  for i in range(-10, 0)]))
-                            if atr <= 0: continue
-                            closes = [float(x['c']) for x in c5[-14:]]
-                            gains  = [max(closes[i]-closes[i-1], 0) for i in range(1, len(closes))]
-                            losses = [max(closes[i-1]-closes[i], 0) for i in range(1, len(closes))]
-                            avg_g  = sum(gains) / len(gains) if gains else 0
-                            avg_l  = sum(losses) / len(losses) if losses else 1e-9
-                            rsi    = 100 - 100 / (1 + avg_g / avg_l)
-
-                            direction = None
-                            sr_level  = None
-                            max_dist  = atr * 0.5  # distanza massima dinamica (0.3–0.8 × ATR)
-
-                            # Test LONG: prezzo scende verso supporto (da sopra), entro ATR
-                            for sup in sr_data.get("supports", []):
-                                dist = mid_px - sup
-                                if 0 < dist <= max_dist and rsi < 35:
-                                    lower_wick = min(o, c_px) - l
-                                    body       = abs(c_px - o) if abs(c_px - o) > 0 else atr * 0.1
-                                    if lower_wick > body * 1.2 and v > 0:
-                                        direction = "LONG"
-                                        sr_level  = sup
-                                        break
-
-                            # Test SHORT: prezzo sale verso resistenza (da sotto), entro ATR
-                            if not direction:
-                                for res in sr_data.get("resistances", []):
-                                    dist = res - mid_px
-                                    if 0 < dist <= max_dist and rsi > 65:
-                                        upper_wick = h - max(o, c_px)
-                                        body       = abs(c_px - o) if abs(c_px - o) > 0 else atr * 0.1
-                                        if upper_wick > body * 1.2 and v > 0:
-                                            direction = "SHORT"
-                                            sr_level  = res
-                                            break
-
-                            if not direction: continue
-
-                            # Calcola SL/TP da ATR
-                            sl_dist = atr * 1.5
-                            tp_dist = atr * 2.0
-                            if direction == "LONG":
-                                sl_px = mid_px - sl_dist
-                                tp_px = mid_px + tp_dist
-                            else:
-                                sl_px = mid_px + sl_dist
-                                tp_px = mid_px - tp_dist
-
-                            # Verifica clearance S/R sul TP
-                            sr_ok, sr_reason = check_sr_clearance(coin, direction, mid_px, tp_px, sr_data)
-                            if not sr_ok:
-                                log_exec(f"[{coin}] SR fast-entry skip: {sr_reason}")
-                                continue
-
-                            log_exec(f"[{coin}] ⚡ SR fast-entry [{direction}] livello:{sr_level:.4f} RSI:{rsi:.1f}")
-                            fast_sig = {
-                                "direction":    direction,
-                                "signal_type":  "REVERSAL",
-                                "strategy":     "REVERSAL",
-                                "scalp_mode":   "RANGE",
-                                "sl":           sl_px,
-                                "tp":           tp_px,
-                                "signal_px":    mid_px,
-                                "ts":           now,
-                                "score":        SETUP_SCORE_MIN,
-                                "profit_factor": 1.5,
-                                "win_rate":     0.50,
-                                "signal_max_age": 120,
-                                "sr_level":     sr_level,
-                                "entry_profile": {"pf_min": 1.2, "wr_min": 0.44,
-                                                   "confluence_min": 2, "volume_15m_min": 0.3},
-                            }
-                            result = open_trade(coin, fast_sig, mids,
-                                                sz_decimals.get(coin, 2),
-                                                px_decimals.get(coin, 2),
-                                                size_mult=1.0)
-                            if result in ("filled", "pending"):
-                                last_trade_time[coin] = now
-                                active_coin_set.add(coin)
-                                slots_free -= 1
-                                open_trade_meta[coin] = {
-                                    "entry_px":        mid_px,
-                                    "signal":          fast_sig,
-                                    "ts_open":         now,
-                                    "partial_done":    False,
-                                    "trailing_active": False,
-                                    "current_ts":      0,
-                                    "peak_pnl":        0.0,
-                                    "worst_pnl":       0.0,
-                                    "profit_lock_sl":  0.0,
-                                    "ml_alt_features": [],
-                                }
-                                time.sleep(5)
-                                active_positions = get_open_positions()  # aggiorna per evitare doppio open
-                                if slots_free <= 0: break
-                        except Exception as e_sr:
-                            log_err(f"[{coin}] SR fast-entry error: {e_sr}")
-                            continue
 
         except Exception as e:
             log_err(f"Executor loop: {e}")
@@ -8033,20 +7511,11 @@ def set_all_isolated():
     except Exception as e:
         log("MAIN", f"⚠️ set_all_isolated error: {e}")
         return
-    # Usa leva minima da LEVERAGE_CONFIG (non 1x — causerebbe margin explosion su posizioni aperte)
-    default_lev = min(LEVERAGE_CONFIG.values())  # 10x
     ok = 0; fail = 0
     for coin in coins:
-        # Non toccare coin con posizione aperta
-        try:
-            pos = get_open_positions()
-            if coin in pos:
-                continue
-        except:
-            pass
         for attempt in range(3):
             try:
-                call(_exchange.update_leverage, default_lev, coin, is_cross=False, timeout=8)
+                call(_exchange.update_leverage, 1, coin, is_cross=False, timeout=8)
                 ok += 1
                 break
             except Exception as e:
@@ -8056,7 +7525,7 @@ def set_all_isolated():
                     fail += 1
                     break
         time.sleep(0.05)
-    log("MAIN", f"🔒 Isolated {default_lev}x: {ok} OK, {fail} fail su {len(coins)} coin")
+    log("MAIN", f"🔒 Isolated: {ok} OK, {fail} fail su {len(coins)} coin")
 
 def main():
     log("MAIN", "🚀 UNIFIED BOT — BTC Scalper V7 + Altcoin Processor")
@@ -8209,20 +7678,10 @@ def btc_executor_loop(sz_dec, px_dec):
                     log_btc(f"⏸️ Loss — sleeping {BTC_COOLDOWN_AFTER_LOSS}s")
                     time.sleep(BTC_COOLDOWN_AFTER_LOSS)
 
-                # ML online learning — target: trade_expectancy = pnl_pct / atr_pct
+                # ML online learning
                 ml_feats = last_pos_state.get("ml_features", [])
                 if ml_feats and len(ml_feats) == OnlineGBClassifier.N_FEATURES:
-                    _atr_ref = last_pos_state.get("atr", 0)
-                    _atr_pct_ref = (_atr_ref / entry) if entry > 0 and _atr_ref > 0 else 0.01
-                    _expectancy = (pnl_pct / 100.0) / _atr_pct_ref
-                    _full_feats = list(ml_feats)
-                    if len(_full_feats) == OnlineGBClassifier.N_FEATURES:
-                        _full_feats[16] = last_pos_state.get("worst_pnl", 0.0)  # mae
-                        _full_feats[17] = last_pos_state.get("peak_pnl",  0.0)  # mfe
-                        _full_feats[19] = _atr_pct_ref                           # atr_pct
-                        _full_feats[23] = OnlineGBClassifier.encode_coin_category(BTC_COIN)
-                        _full_feats[24] = float(last_pos_state.get("leverage", LEVERAGE_CONFIG.get("TREND", 20)))
-                    ml_record_outcome(_full_feats, _expectancy)
+                    ml_record_outcome(ml_feats, pnl_usd > 0)
 
                 last_pos_state = None
 
@@ -8326,17 +7785,7 @@ def btc_executor_loop(sz_dec, px_dec):
 
                     ml_feats = last_pos_state.get("ml_features", [])
                     if ml_feats and len(ml_feats) == OnlineGBClassifier.N_FEATURES:
-                        _atr_r2  = last_pos_state.get("atr", 0)
-                        _atr_p2  = (_atr_r2 / entry) if entry > 0 and _atr_r2 > 0 else 0.01
-                        _exp2    = (pnl_real / 100.0) / _atr_p2
-                        _ff2     = list(ml_feats)
-                        if len(_ff2) == OnlineGBClassifier.N_FEATURES:
-                            _ff2[16] = last_pos_state.get("worst_pnl", 0.0)
-                            _ff2[17] = last_pos_state.get("peak_pnl",  0.0)
-                            _ff2[19] = _atr_p2
-                            _ff2[23] = OnlineGBClassifier.encode_coin_category(BTC_COIN)
-                            _ff2[24] = float(last_pos_state.get("leverage", LEVERAGE_CONFIG.get("TREND", 20)))
-                        ml_record_outcome(_ff2, _exp2)
+                        ml_record_outcome(ml_feats, pnl_usd > 0)
 
                     last_pos_state = None
 
