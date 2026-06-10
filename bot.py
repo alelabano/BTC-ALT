@@ -890,7 +890,7 @@ FLOW_CACHE_TTL = 15  # aggiorna ogni 15s
 _mid_cache = {"ts": 0, "value": 0}
 _pos_cache = {"ts": 0, "value": None}
 _bal_cache = {"ts": 0, "value": 0}
-API_CACHE_TTL = 3  # 3s cache for mid/pos/bal — fresh enough for scalping
+API_CACHE_TTL = 10  # 3s cache for mid/pos/bal — fresh enough for scalping
 
 
 def get_btc_open_interest():
