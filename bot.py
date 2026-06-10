@@ -557,13 +557,13 @@ def fleet_check_kill_switch():
 # ================================================================
 
 _sentiment_cache = {"score": 50, "components": {}, "ts": 0}
-SENTIMENT_CACHE_TTL = 300  # 5 min cache — ~288 calls/day per API
+SENTIMENT_CACHE_TTL = 1800  
 
 # Sub-caches per API con TTL indipendenti (evita burst se una è lenta)
 _social_cache = {"ts": 0, "score": 50, "components": {}}
 _cryptocompare_cache = {"ts": 0, "bull_pct": 50, "signals": {}}
-SOCIAL_CACHE_TTL = 300      # 5 min
-CRYPTOCOMPARE_CACHE_TTL = 300
+SOCIAL_CACHE_TTL = 1800      
+CRYPTOCOMPARE_CACHE_TTL = 1800
 
 # ── Keyword sentiment scoring per Reddit titles ──
 _BULLISH_WORDS = {
