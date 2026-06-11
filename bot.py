@@ -123,7 +123,7 @@ MIN_PRECISION = 0.35; MIN_PRECISION_FLOOR = 0.28
 MIN_PROFIT_FACTOR = 1.35; MIN_PROFIT_FACTOR_FLOOR = 1.20
 MIN_BACKTEST_TRADES = 12; VOLATILITY_MIN = 0.0015
 DEFAULT_CAPITAL = float(os.getenv("ACCOUNT_CAPITAL_USD", "1000"))
-API_TIMEOUT_SEC = 2; PROCESSOR_INTERVAL = 5 * 30
+API_TIMEOUT_SEC = 2; PROCESSOR_INTERVAL = 1 * 30
 ALT_FUNDING_HISTORY_LEN = 42
 FAST_EXIT_THRESHOLD_ALT = -0.1  # -10% ROE (approx)
 MOMENTUM_MULT_ALT = 1.2
@@ -140,7 +140,7 @@ ENTRY_POLL_ATTEMPTS = 2; ENTRY_POLL_INTERVAL = 0.2
 COIN_COOLDOWN_MR = 3600; COIN_COOLDOWN_TREND = 14400; COIN_COOLDOWN = 3600
 SETUP_SCORE_MIN = 55  # severo: senza SL exchange servono setup davvero puliti
 ALT_TRAILING_INTERVAL = 10  # ALT trailing check ogni 30s
-SCANNER_INTERVAL = 5 * 60; SCANNER_MAX_UNIVERSE = 229
+SCANNER_INTERVAL = 2 * 60; SCANNER_MAX_UNIVERSE = 229
 PROCESSOR_MAX_COINS = 30
 CORRELATION_THRESHOLD = 0.55
 MIN_NOTIONAL_USD = 10.0          # Hyperliquid minimo assoluto
@@ -557,13 +557,13 @@ def fleet_check_kill_switch():
 # ================================================================
 
 _sentiment_cache = {"score": 50, "components": {}, "ts": 0}
-SENTIMENT_CACHE_TTL = 1800  
+SENTIMENT_CACHE_TTL = 300  # 5 min cache — ~288 calls/day per API
 
 # Sub-caches per API con TTL indipendenti (evita burst se una è lenta)
 _social_cache = {"ts": 0, "score": 50, "components": {}}
 _cryptocompare_cache = {"ts": 0, "bull_pct": 50, "signals": {}}
-SOCIAL_CACHE_TTL = 1800      
-CRYPTOCOMPARE_CACHE_TTL = 1800
+SOCIAL_CACHE_TTL = 300      # 5 min
+CRYPTOCOMPARE_CACHE_TTL = 300
 
 # ── Keyword sentiment scoring per Reddit titles ──
 _BULLISH_WORDS = {
@@ -890,7 +890,7 @@ FLOW_CACHE_TTL = 15  # aggiorna ogni 15s
 _mid_cache = {"ts": 0, "value": 0}
 _pos_cache = {"ts": 0, "value": None}
 _bal_cache = {"ts": 0, "value": 0}
-API_CACHE_TTL = 10  # 3s cache for mid/pos/bal — fresh enough for scalping
+API_CACHE_TTL = 3  # 3s cache for mid/pos/bal — fresh enough for scalping
 
 
 def get_btc_open_interest():
@@ -3869,9 +3869,7 @@ def build_adaptive_entry_profile(coin: str, regime: str, strategy: str,
         elif stats["pf"] >= ADAPTIVE_ENTRY_GOOD_PF and stats["wr"] >= ADAPTIVE_ENTRY_GOOD_WR and stats["avg_pnl"] > 0:
             quality += 1
             reasons.append(f"hist forte PF:{stats['pf']:.2f} WR:{stats['wr']:.0%}")
-    else:
-        quality -= 1
-        reasons.append(f"pochi trade n={stats['n']}")
+    # nessuna penalità se storia insufficiente — rimane quality=0 (base)
 
     if bt:
         pf = float(bt.get("profit_factor", 0) or 0)
