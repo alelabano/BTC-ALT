@@ -1324,10 +1324,12 @@ def ml_predict_alt(features):
 
 def ml_record_alt_outcome(features, won):
     """Record outcome per aggiornare il modello ALT."""
+    if not features or len(features) != OnlineGBClassifier.N_FEATURES:
+        log_alt(f"[ML-ALT] Skip update: features invalid ({len(features) if features else 0}/{OnlineGBClassifier.N_FEATURES})")
+        return
     _ml_model_alt.update(features, 1 if won else 0)
-    if _ml_model_alt.n_samples % 5 == 0:
-        _rset("alt:ml_model", _ml_model_alt.to_dict())
-        log_alt(f"[ML-ALT] Saved ({_ml_model_alt.n_samples} samples, acc:{_ml_model_alt.get_accuracy():.0%})")
+    _rset("alt:ml_model", _ml_model_alt.to_dict())
+    log_alt(f"[ML-ALT] Saved ({_ml_model_alt.n_samples} samples, acc:{_ml_model_alt.get_accuracy():.0%})")
 
 def ml_load_model_alt():
     d = _rget("alt:ml_model")
@@ -1824,10 +1826,10 @@ def build(df):
     df['ll'] = (df['low']  < df['low'].rolling(10).min().shift(1)).astype(int)
 
     # ADX — Average Directional Index (trend strength)
-    plus_dm = df['high'].diff()
-    minus_dm = -df['low'].diff()
-    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
-    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+    plus_dm_raw = df['high'].diff()
+    minus_dm_raw = -df['low'].diff()
+    plus_dm = plus_dm_raw.where((plus_dm_raw > minus_dm_raw) & (plus_dm_raw > 0), 0)
+    minus_dm = minus_dm_raw.where((minus_dm_raw > plus_dm_raw) & (minus_dm_raw > 0), 0)
     atr14 = tr.rolling(14).mean()
     plus_di = 100 * (plus_dm.rolling(14).mean() / (atr14 + 1e-10))
     minus_di = 100 * (minus_dm.rolling(14).mean() / (atr14 + 1e-10))
@@ -2553,8 +2555,8 @@ def check_signal():
     """
     regime = update_regime()
 
-    f_1h  = _pool.submit(fetch_df, "1h", 30)
-    f_15m = _pool.submit(fetch_df, "15m", 14)
+    f_1h  = _pool.submit(fetch_df, BTC_COIN, "1h", 30)
+    f_15m = _pool.submit(fetch_df, BTC_COIN, "15m", 14)
     try:
         df_1h  = f_1h.result(timeout=20)
         df_15m = f_15m.result(timeout=20)
@@ -2681,7 +2683,28 @@ def check_signal():
     if liq.get("spread") is not None and liq["spread"] > 0.0008:
         return None
 
-    ml_features = []
+    flow_data = _flow_cache.get("data", {}) or {}
+    cvd_data = flow_data.get("cvd_trend", {}) or {}
+    ob_data = flow_data.get("ob_delta", {}) or {}
+    oi_data = flow_data.get("oi_momentum", {}) or {}
+    ml_features = [
+        rsi5,
+        rsi1h,
+        macd5,
+        adx1h,
+        vol5,
+        fz,
+        float(sent),
+        float(ob_data.get("imbalance_ratio", 0.5) or 0.5),
+        float(cvd_data.get("cvd_slope", 0.0) or 0.0),
+        encode_regime(regime),
+        encode_mode(scalp_mode),
+        50.0,
+        float(oi_data.get("oi_change_pct", 0.0) or 0.0),
+        bb5,
+        slope5,
+        float(liq.get("spread", 0.0) or 0.0),
+    ]
     details += f" sent:{sent}"
     log_btc(f"[SIGNAL] {direction} {sig_type} | {details}")
 
@@ -2744,47 +2767,6 @@ def check_signal():
     tp1_pct = tp1_dist / px * 100
     tp2_pct = tp2_dist / px * 100
     log_btc(f"SL:{sl_pct:.2f}% TP1:{tp1_pct:.2f}% TP2:{tp2_pct:.2f}% R:R={effective_rr:.1f} [{strategy}]")
-
-    # ── POPULATE ML FEATURES (16 total) ──
-    try:
-        flow = _flow_cache.get("data", {})
-        ob = flow.get("ob_delta", {})
-        cvd_data = flow.get("cvd_trend", {})
-        oi_data = flow.get("oi_momentum", {})
-        
-        ob_imbalance = float(ob.get("imbalance_ratio", 0.5))
-        cvd_slope = float(cvd_data.get("cvd_slope", 0))
-        oi_change = float(oi_data.get("oi_change_pct", 0))
-        spread = float(liq.get("spread", 0.001)) if liq else 0.001
-        
-        # Encode regime and mode
-        regime_map = {"BULL": 1.0, "BEAR": -1.0, "RANGE": 0.0, "RANGE_LOW_VOL": 0.0}
-        regime_enc = float(regime_map.get(regime, 0.0))
-        
-        mode_map = {"TREND": 1.0, "RANGE": 0.0, "FLASH": 2.0}
-        mode_enc = float(mode_map.get(scalp_mode, 0.0))
-        
-        ml_features = [
-            rsi5,              # 0: rsi_15m
-            rsi1h,             # 1: rsi_1h
-            macd5,             # 2: macd_hist
-            adx1h,             # 3: adx_1h
-            vol5,              # 4: vol_rel
-            fz,                # 5: funding_z
-            sent,              # 6: sentiment
-            ob_imbalance,      # 7: ob_imbalance
-            cvd_slope,         # 8: cvd_slope
-            regime_enc,        # 9: regime_enc
-            mode_enc,          # 10: mode_enc
-            50.0,              # 11: setup_score (placeholder)
-            oi_change,         # 12: oi_change_pct
-            bb5,               # 13: bb_pos
-            slope5,            # 14: ema_slope
-            spread             # 15: spread
-        ]
-    except Exception as e:
-        log_btc(f"⚠️ ML feature extraction failed: {e} — using empty")
-        ml_features = []
 
     return (direction, sig_type, sl, tp, px, atr5, details, sl_dist,
             size_mult, regime, 50, scalp_mode, ml_features, tp1)
@@ -4119,10 +4101,10 @@ def build_features(df_input: pd.DataFrame) -> pd.DataFrame:
     df['macd_hist'] = df['macd'] - df['macd_signal']
 
     # ADX — Average Directional Index (trend strength, from V7)
-    plus_dm = df['high'].diff()
-    minus_dm = -df['low'].diff()
-    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
-    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+    plus_dm_raw = df['high'].diff()
+    minus_dm_raw = -df['low'].diff()
+    plus_dm = plus_dm_raw.where((plus_dm_raw > minus_dm_raw) & (plus_dm_raw > 0), 0)
+    minus_dm = minus_dm_raw.where((minus_dm_raw > plus_dm_raw) & (minus_dm_raw > 0), 0)
     atr14 = tr.rolling(14).mean()
     plus_di = 100 * (plus_dm.rolling(14).mean() / (atr14 + 1e-10))
     minus_di = 100 * (minus_dm.rolling(14).mean() / (atr14 + 1e-10))
@@ -4829,7 +4811,8 @@ JSON ONLY: {{"score":<0-10>,"valid":<true se >=3>,"wait":<true SOLO se rischio l
         reason     = result.get("reasoning", "")
         ai_strategy = result.get("strategy", strategy)   # AI può sovrascrivere
         ai_mode     = result.get("mode", "SCALPING")
-        if ai_strategy not in ("MEAN_REV", "TREND", "HYBRID"):
+        valid_ai_strategies = ("MEAN_REV", "TREND", "HYBRID", "MOMENTUM", "REVERSAL")
+        if ai_strategy not in valid_ai_strategies:
             ai_strategy = strategy
         if ai_mode not in ("SCALPING", "SWING"):
             ai_mode = "SCALPING"
@@ -4913,7 +4896,21 @@ def quick_backtest(df: pd.DataFrame, direction: str, coin: str = "",
             (rsi_a >= 40) & (rsi_a <= 60) & (macd_h < 0)
         )
 
-        if direction == "LONG":
+        reversal_long = (
+            (close_a < ema20_a) & (rsi_a < 35) & (bb_w <= bb_w_ma) &
+            (macd_h > np.roll(macd_h, 1)) & (vol_a >= 0.5)
+        )
+        reversal_short = (
+            (close_a > ema20_a) & (rsi_a > 65) & (bb_w <= bb_w_ma) &
+            (macd_h < np.roll(macd_h, 1)) & (vol_a >= 0.5)
+        )
+        reversal_long[0] = False
+        reversal_short[0] = False
+
+        if strategy == "REVERSAL":
+            sig_mask = reversal_long if direction == "LONG" else reversal_short
+            ema_filter = np.ones(n, dtype=bool)
+        elif direction == "LONG":
             sig_mask = breakout_long | momentum_long
             ema_filter = close_a > ema200_a
         else:
@@ -5368,10 +5365,6 @@ def run_processor():
             if regime == "BEAR":
                 long_score = 0
 
-            # RANGE: skip SHORT/LONG blocking — in RANGE regime, momentum è debole.
-            # Non ha senso bloccare una direzione per oscillazioni normali.
-            # Il BTC decoupling check (line 5365-5368) basta.
-
             # Scegli direzione
             if long_score >= entry_profile["confluence_min"] and long_score > short_score:
                 direction     = "LONG"
@@ -5384,25 +5377,20 @@ def run_processor():
             else:
                 continue
 
-            # ── FILTRO SLOPE 1h: blocca controtendenza forte ─────────
-            if direction == "SHORT" and slope_4h > PROCESSOR_SLOPE_4H_BLOCK:
-                continue
-            if direction == "LONG" and slope_4h < -PROCESSOR_SLOPE_4H_BLOCK:
-                continue
+            # ── FILTRI DIREZIONALI BTC/SLOPE ─────────────────────────
+            # In RANGE i reversal devono poter shortare la resistenza e longare il supporto.
+            # Questi blocchi restano attivi solo nei regimi direzionali.
+            if regime != "RANGE":
+                if direction == "SHORT" and slope_4h > PROCESSOR_SLOPE_4H_BLOCK:
+                    continue
+                if direction == "LONG" and slope_4h < -PROCESSOR_SLOPE_4H_BLOCK:
+                    continue
 
-            # ── BTC DECOUPLING: blocca solo controtendenza forte ──
-            btc_dir = "BULL" if btc_momentum > PROCESSOR_BTC_DIR_MOM else "BEAR" if btc_momentum < -PROCESSOR_BTC_DIR_MOM else "NEUTRAL"
-
-            can_trade = True  # default: trada
-            # Blocca SOLO se controtendenza forte a BTC
-            if btc_dir == "BULL" and direction == "SHORT":
-                can_trade = False
-            elif btc_dir == "BEAR" and direction == "LONG":
-                can_trade = False
-            # BTC NEUTRAL → trada sempre (ALT hanno dinamiche proprie)
-
-            if not can_trade:
-                continue
+                btc_dir = "BULL" if btc_momentum > PROCESSOR_BTC_DIR_MOM else "BEAR" if btc_momentum < -PROCESSOR_BTC_DIR_MOM else "NEUTRAL"
+                if btc_dir == "BULL" and direction == "SHORT":
+                    continue
+                if btc_dir == "BEAR" and direction == "LONG":
+                    continue
 
             recent_closes = df['close'].iloc[-12:].tolist()
 
@@ -5513,7 +5501,7 @@ def run_processor():
             spread_pct = float((last['high'] - last['low']) / (last['close'] + 1e-10))
             liq_data   = fetch_liquidity_data(coin, px)
 
-            ai_valid, ai_score, ai_reason, _, _ = ai_validate_signal(
+            ai_valid, ai_score, ai_reason, ai_strategy, ai_mode = ai_validate_signal(
                 coin, direction, regime, rsi, bb_pos, vol_rel,
                 funding_z, oi_change, confluence_n, recent_closes,
                 df=df, strategy=strategy,
@@ -5541,10 +5529,17 @@ def run_processor():
                 clear_candidate(coin)
                 continue
             ai_size_mult = 1.0
-            if ai_score < 3:
-                ai_size_mult = 0.5
-            elif ai_score < 6:
-                ai_size_mult = 0.7
+            if not ai_is_fallback:
+                if ai_score < 3:
+                    ai_size_mult = 0.5
+                elif ai_score < 6:
+                    ai_size_mult = 0.7
+                if ai_mode in ("SCALPING", "SWING"):
+                    candidate["mode"] = ai_mode
+                if ai_strategy in ("MEAN_REV", "TREND", "HYBRID", "MOMENTUM", "REVERSAL"):
+                    strategy = ai_strategy
+                    candidate["strategy"] = ai_strategy
+                    candidate["ai_strategy"] = ai_strategy
 
             setup_score = compute_setup_score(
                 direction, px, ema50_val, ema200_4h,
@@ -5568,7 +5563,7 @@ def run_processor():
                 encode_regime(regime),
                 encode_mode(candidate.get("mode", "SCALPING")),
                 float(ai_score), 0.0, bb_pos,
-                float(df.iloc[-1].get('ema_slope', 0) if hasattr(df.iloc[-1], 'get') else 0),
+                float(df.iloc[-1].get('ema20_slope', 0) if hasattr(df.iloc[-1], 'get') else 0),
                 spread_pct
             ]
             ml_alt_prob, ml_alt_info = ml_predict_alt(ml_alt_features)
@@ -5576,7 +5571,7 @@ def run_processor():
                 log_alt(f"[{coin}] 🤖 ML-ALT BLOCK: P(win)={ml_alt_prob:.0%} acc:{ml_alt_info['acc']:.0%} — skip")
                 clear_candidate(coin)
                 continue
-            ml_size_mult = ml_alt_info.get("size_mult", 1.0)
+            ml_size_mult = min(ai_size_mult, ml_alt_info.get("size_mult", 1.0))
             entry_profile = build_adaptive_entry_profile(coin, regime, strategy, bt=candidate, ai_score=None if ai_is_fallback else ai_score, ml_prob=ml_alt_prob, vol_rel=vol_rel)
             if ml_alt_info["action"] != "OBSERVE":
                 log_alt(f"[{coin}] 🤖 ML-ALT: P(win)={ml_alt_prob:.0%} → {ml_alt_info['action']} size×{ml_size_mult:.2f} (n={ml_alt_info['n_samples']})")
@@ -7463,7 +7458,7 @@ def executor_thread_alt():
                     # ── BTC momentum check realtime (executor) ────────
                     # Blocca solo se BTC si muove FORTE (>0.5%) negli ultimi 15min.
                     # Non cancellare il segnale — potrebbe essere valido al prossimo ciclo.
-                    if coin not in BTC_ETH_COINS and mids:
+                    if coin not in BTC_ETH_COINS and mids and sig.get("regime") != "RANGE":
                         btc_change_fast = 0.0
                         try:
                             btc_candles_exec = call(_info.candles_snapshot, "BTC", "5m",
