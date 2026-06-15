@@ -2745,6 +2745,47 @@ def check_signal():
     tp2_pct = tp2_dist / px * 100
     log_btc(f"SL:{sl_pct:.2f}% TP1:{tp1_pct:.2f}% TP2:{tp2_pct:.2f}% R:R={effective_rr:.1f} [{strategy}]")
 
+    # ── POPULATE ML FEATURES (16 total) ──
+    try:
+        flow = _flow_cache.get("data", {})
+        ob = flow.get("ob_delta", {})
+        cvd_data = flow.get("cvd_trend", {})
+        oi_data = flow.get("oi_momentum", {})
+        
+        ob_imbalance = float(ob.get("imbalance_ratio", 0.5))
+        cvd_slope = float(cvd_data.get("cvd_slope", 0))
+        oi_change = float(oi_data.get("oi_change_pct", 0))
+        spread = float(liq.get("spread", 0.001)) if liq else 0.001
+        
+        # Encode regime and mode
+        regime_map = {"BULL": 1.0, "BEAR": -1.0, "RANGE": 0.0, "RANGE_LOW_VOL": 0.0}
+        regime_enc = float(regime_map.get(regime, 0.0))
+        
+        mode_map = {"TREND": 1.0, "RANGE": 0.0, "FLASH": 2.0}
+        mode_enc = float(mode_map.get(scalp_mode, 0.0))
+        
+        ml_features = [
+            rsi5,              # 0: rsi_15m
+            rsi1h,             # 1: rsi_1h
+            macd5,             # 2: macd_hist
+            adx1h,             # 3: adx_1h
+            vol5,              # 4: vol_rel
+            fz,                # 5: funding_z
+            sent,              # 6: sentiment
+            ob_imbalance,      # 7: ob_imbalance
+            cvd_slope,         # 8: cvd_slope
+            regime_enc,        # 9: regime_enc
+            mode_enc,          # 10: mode_enc
+            50.0,              # 11: setup_score (placeholder)
+            oi_change,         # 12: oi_change_pct
+            bb5,               # 13: bb_pos
+            slope5,            # 14: ema_slope
+            spread             # 15: spread
+        ]
+    except Exception as e:
+        log_btc(f"⚠️ ML feature extraction failed: {e} — using empty")
+        ml_features = []
+
     return (direction, sig_type, sl, tp, px, atr5, details, sl_dist,
             size_mult, regime, 50, scalp_mode, ml_features, tp1)
 # ================================================================
@@ -3869,7 +3910,9 @@ def build_adaptive_entry_profile(coin: str, regime: str, strategy: str,
         elif stats["pf"] >= ADAPTIVE_ENTRY_GOOD_PF and stats["wr"] >= ADAPTIVE_ENTRY_GOOD_WR and stats["avg_pnl"] > 0:
             quality += 1
             reasons.append(f"hist forte PF:{stats['pf']:.2f} WR:{stats['wr']:.0%}")
-    # nessuna penalità se storia insufficiente — rimane quality=0 (base)
+    else:
+        quality -= 1
+        reasons.append(f"pochi trade n={stats['n']}")
 
     if bt:
         pf = float(bt.get("profit_factor", 0) or 0)
@@ -5325,17 +5368,9 @@ def run_processor():
             if regime == "BEAR":
                 long_score = 0
 
-            # RANGE: blocca controtendenza solo se BTC ha momentum FORTE e COERENTE
-            # tra 1h e 4h. Un dip 1h con 4h positivo = noise, non bloccare.
-            if regime == "RANGE":
-                # BTC sale forte: 1h E 4h entrambi positivi sopra soglia
-                btc_strong_up   = btc_momentum > PROCESSOR_BTC_STRONG_MOM_1H and btc_mom_4h > PROCESSOR_BTC_STRONG_MOM_4H
-                # BTC scende forte: 1h E 4h entrambi negativi
-                btc_strong_down = btc_momentum < -PROCESSOR_BTC_STRONG_MOM_1H and btc_mom_4h < -PROCESSOR_BTC_STRONG_MOM_4H
-                if btc_strong_up:
-                    short_score = 0
-                if btc_strong_down:
-                    long_score = 0
+            # RANGE: skip SHORT/LONG blocking — in RANGE regime, momentum è debole.
+            # Non ha senso bloccare una direzione per oscillazioni normali.
+            # Il BTC decoupling check (line 5365-5368) basta.
 
             # Scegli direzione
             if long_score >= entry_profile["confluence_min"] and long_score > short_score:
